@@ -1,0 +1,367 @@
+---
+title: "Seafood Analysis"
+author: "Connor Quiroz"
+date: "2024-11-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggformula)
+```
+
+# Data Cleaning
+
+```{r data cleaning}
+# Read in data file
+consumption <- read.csv("example_consumption_eez_2024_11_15.csv")
+unique(consumption$year)
+names(consumption)
+
+# Looking at total weights per country (aggregating species weight in 2019)
+con_weight <- consumption %>%
+  filter(year == 2019) %>%
+  group_by(eez_name) %>%
+  mutate(live_weight_t = as.numeric(live_weight_t)) %>%
+  summarize(total_weight = sum(live_weight_t)) %>%
+  arrange(desc(total_weight))
+
+
+# Shannon diversity per country
+con_shannon <- consumption %>%
+  filter(year == 2019) %>%
+  group_by(eez_name, sciname) %>%
+  mutate(individual_abundance = length(sciname)) %>%
+  distinct(eez_name, sciname, .keep_all = TRUE) %>%  #
+  group_by(eez_name) %>%
+  summarize(
+    total_abundance = sum(individual_abundance),
+    pi = individual_abundance / total_abundance,
+    shannon = -sum(pi * log(pi))
+  ) %>%
+  distinct(eez_name, .keep_all = TRUE) %>%
+  arrange(desc(shannon)) %>%
+  ungroup() %>%
+  select(eez_name, shannon)
+
+# Join datasets
+con_joined <- left_join(con_weight, con_shannon, by = "eez_name")
+
+# Sort countries in alphabetical order
+con_joined %>%
+  arrange(-desc(eez_name))
+
+
+# Read in extraneous Adaptive Capacity data
+hdi <- read.csv("QuirozConnor_Chapter1_Data.csv")
+
+# Add in hdi values to joined dataset
+con_joined <- left_join(con_joined, hdi, by = "eez_name")
+
+# Update joined dataset to have log transformed total weight as a variable
+con_joined <- con_joined %>%
+  mutate(log_weight = log(total_weight))
+
+# Add in region (e.g., North America, Asia, etc.)
+con_joined <- con_joined %>%
+  mutate(
+    region = case_when(
+      eez_name %in% c(
+        "Algeria",
+        "Angola",
+        "Benin",
+        "Cameroon",
+        "Cape Verde",
+        "Comoros",
+        "Congo - Brazzaville",
+        "Congo - Kinshasa",
+        "Côte d’Ivoire",
+        "Djibouti",
+        "Egypt",
+        "Equatorial Guinea",
+        "Eritrea",
+        "Gabon",
+        "Gambia",
+        "Ghana",
+        "Guinea",
+        "Guinea-Bissau",
+        "Kenya",
+        "Liberia",
+        "Libya",
+        "Madagascar",
+        "Malawi",
+        "Mali",
+        "Mauritania",
+        "Mauritius",
+        "Morocco",
+        "Mozambique",
+        "Namibia",
+        "Niger",
+        "Nigeria",
+        "São Tomé & Príncipe",
+        "Senegal",
+        "Seychelles",
+        "Sierra Leone",
+        "Somalia",
+        "South Africa",
+        "Sudan",
+        "Tanzania",
+        "Togo",
+        "Tunisia",
+        "Zambia",
+        "Zimbabwe"
+      ) ~
+        "Africa",
+      
+      eez_name %in% c(
+        "Afghanistan",
+        "Armenia",
+        "Azerbaijan",
+        "Bahrain",
+        "Bangladesh",
+        "Bhutan",
+        "Brunei",
+        "Cambodia",
+        "China",
+        "Cyprus",
+        "Georgia",
+        "India",
+        "Indonesia",
+        "Iran",
+        "Iraq",
+        "Israel",
+        "Japan",
+        "Jordan",
+        "Kazakhstan",
+        "Kuwait",
+        "Kyrgyzstan",
+        "Lebanon",
+        "Malaysia",
+        "Maldives",
+        "Mongolia",
+        "Myanmar (Burma)",
+        "Nepal",
+        "North Korea",
+        "Oman",
+        "Pakistan",
+        "Palestinian Territories",
+        "Philippines",
+        "Qatar",
+        "Russia",
+        "Saudi Arabia",
+        "Singapore",
+        "South Korea",
+        "Sri Lanka",
+        "Syria",
+        "Tajikistan",
+        "Taiwan",
+        "Thailand",
+        "Timor-Leste",
+        "Turkey",
+        "United Arab Emirates",
+        "Uzbekistan",
+        "Vietnam",
+        "Yemen"
+      ) ~
+        "Asia",
+      
+      eez_name %in% c(
+        "Albania",
+        "Belgium",
+        "Bosnia & Herzegovina",
+        "Bulgaria",
+        "Croatia",
+        "Cyprus",
+        "Denmark",
+        "Estonia",
+        "Finland",
+        "France",
+        "Germany",
+        "Greece",
+        "Iceland",
+        "Ireland",
+        "Italy",
+        "Latvia",
+        "Lebanon",
+        "Lithuania",
+        "Luxembourg",
+        "Malta",
+        "Montenegro",
+        "Netherlands",
+        "Norway",
+        "Poland",
+        "Portugal",
+        "Romania",
+        "Russia",
+        "Slovenia",
+        "Spain",
+        "Sweden",
+        "Switzerland",
+        "United Kingdom",
+        "Ukraine"
+      ) ~
+        "Europe",
+      
+      eez_name %in% c(
+        "Antigua & Barbuda",
+        "Bahamas",
+        "Barbados",
+        "Belize",
+        "Canada",
+        "Costa Rica",
+        "Cuba",
+        "Dominica",
+        "Dominican Republic",
+        "Ecuador",
+        "El Salvador",
+        "Grenada",
+        "Guatemala",
+        "Haiti",
+        "Honduras",
+        "Jamaica",
+        "Mexico",
+        "Montserrat",
+        "Nicaragua",
+        "Panama",
+        "St. Kitts & Nevis",
+        "St. Lucia",
+        "St. Vincent & Grenadines",
+        "Trinidad & Tobago",
+        "United States"
+      ) ~
+        "North America",
+      
+      eez_name %in% c(
+        "Argentina",
+        "Brazil",
+        "Chile",
+        "Colombia",
+        "Ecuador",
+        "Guyana",
+        "Paraguay",
+        "Peru",
+        "Suriname",
+        "Uruguay",
+        "Venezuela"
+      ) ~
+        "South America",
+      
+      eez_name %in% c(
+        "Australia",
+        "Fiji",
+        "Kiribati",
+        "Micronesia (Federated States of)",
+        "Nauru",
+        "New Zealand",
+        "Palau",
+        "Papua New Guinea",
+        "Samoa",
+        "Solomon Islands",
+        "Tonga",
+        "Tuvalu",
+        "Vanuatu"
+      ) ~
+        "Oceania",
+      
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Consumption data without NA's (for correlation plots)
+con_na_removed <- con_joined %>%
+  drop_na()
+```
+
+# Data visualization + Analysis
+
+```{r data visualization + analysis}
+# Top 10 total seafood weights by country
+plot_1 <- con_joined %>%
+  arrange(desc(total_weight)) %>%
+  select(eez_name, total_weight) %>%
+  top_n(10) %>%
+  ggplot(aes(x = total_weight, 
+             y = fct_reorder(eez_name, desc(-total_weight)))) +
+  geom_col() +
+  labs(x = "Total seafood weight (tons)", y = "Country EEZ") +
+  theme_light()
+
+# Seafood weight by region
+plot_2 <- con_joined %>%
+  ggplot(aes(x = region, y = log(total_weight), fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  scale_fill_viridis_d(end = 0.9) +
+  theme_light() +
+  guides(fill = "none") +
+  labs(x = "", y = "Shannon diversity")
+
+# Top 10 most diverse seafood by country 
+plot_3 <- con_joined %>%
+  arrange(desc(shannon)) %>%
+  select(eez_name, shannon) %>%
+  top_n(10) %>%
+  ggplot(aes(x = shannon, 
+             y = fct_reorder(eez_name, desc(-shannon)))) +
+  geom_col() +
+  labs(x = "Shannon Diversity", y = "Country EEZ") +
+  theme_light()
+
+# Seafood diversity by region
+plot_4 <- con_joined %>%
+  ggplot(aes(x = region, y = shannon, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  scale_fill_viridis_d(end = 0.9) +
+  theme_light() +
+  guides(fill = "none") +
+  labs(x = "", y = "Log transformed total\nseafood weight (tons)")
+
+# Relationship between shannon diversity and the total weight by country
+plot_5 <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = shannon, color = hdi)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_viridis_c() +
+  facet_wrap(~ region) +
+  theme_light() +
+  labs(x = "Log transformed total seafood weight (tons)", y = "Shannon", color = "HDI")
+
+# Correlations between variables (plots + pearson)
+pairs(con_na_removed[c(3:5)])
+cor(con_na_removed[c(3:5)])
+
+# Linear model between weight
+weight_shannon_lm <- lm(shannon ~ log(total_weight), data = con_joined)
+summary(weight_shannon_lm)
+
+# Testing out normalizing data - potentially might need to regularize if data is not normally distrubted.
+hist((log(con_na_removed$total_weight) - min(log(con_na_removed$total_weight))) / (max(log(con_na_removed$total_weight)) - min(log(con_na_removed$total_weight))))
+```
+
+> Takeaways: Little correlation between hdi and total weight + shannon diversity, but stronger, positive correlation between weight and shannon diversity (as seen in correlatnion + scatter plots)
+
+# Save Images
+
+```{r}
+# Save images
+ggsave("plot_1.jpg", plot = plot_1, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("plot_2.jpg", plot = plot_2, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("plot_3.jpg", plot = plot_3, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("plot_4.jpg", plot = plot_4, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("plot_5.jpg", plot = plot_5, device = "jpeg", height = 3, width = 5, units = "in")
+```
+
+# Dummy data testing to work with big joined datset
+
+```{r dummy data to test functions on actual dataset}
+data.frame(x = c("bird", "bird", "fish", "fish", "fish", "goat", "goat"), y = c("US", "US", "US", "China", "China", "China", "China")) %>%
+  group_by(x, y) %>%
+  mutate(individual_abundance = length(x)) %>%
+  distinct(x, y, .keep_all = TRUE) %>%  # Remove duplicate species-country combinations
+  group_by(y) %>%  # Group by country
+  mutate(total_abundance = sum(individual_abundance), pi = individual_abundance / total_abundance, shannon = -sum(pi * log(pi)))
+```
+
+
