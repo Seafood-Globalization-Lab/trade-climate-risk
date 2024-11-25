@@ -9,55 +9,69 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(ggformula)
+library(countrycode)
 ```
 
 # Data Cleaning
 
 ```{r data cleaning}
-# Read in data file
-consumption <- read.csv("example_consumption_eez_2024_11_15.csv")
-unique(consumption$year)
+# Read in cosnumption data
+consumption <- read.csv("../data/example_consumption_eez_2024_11_15.csv")
+
+# Read in taxonomic data
+sciname <- read.csv("../data/sciname.csv")
+
+# Combine consumption and taxonomic data
+consumption_sciname <- left_join(consumption, sciname, by = "sciname")
+
+# Read in  Adaptive Capacity data
+hdi <- read.csv("../data/hdi.csv")
+hdi <- hdi %>%
+  rename(consumer_iso3c = "country")
+
+# Convert country names to iso3c codes
+for (i in 1:length(hdi$consumer_iso3c)) {
+  hdi$consumer_iso3c[i] <- countryname(hdi$consumer_iso3c[i], destination = "iso3c")
+}
+
+# Variable names for consumption
 names(consumption)
 
 # Looking at total weights per country (aggregating species weight in 2019)
 con_weight <- consumption %>%
-  filter(year == 2019) %>%
-  group_by(eez_name) %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
+  group_by(consumer_iso3c) %>%
   mutate(live_weight_t = as.numeric(live_weight_t)) %>%
   summarize(total_weight = sum(live_weight_t)) %>%
   arrange(desc(total_weight))
 
-
-# Shannon diversity per country
-con_shannon <- consumption %>%
-  filter(year == 2019) %>%
-  group_by(eez_name, sciname) %>%
-  mutate(individual_abundance = length(sciname)) %>%
-  distinct(eez_name, sciname, .keep_all = TRUE) %>%  #
-  group_by(eez_name) %>%
-  summarize(
-    total_abundance = sum(individual_abundance),
-    pi = individual_abundance / total_abundance,
-    shannon = -sum(pi * log(pi))
-  ) %>%
-  distinct(eez_name, .keep_all = TRUE) %>%
-  arrange(desc(shannon)) %>%
+# Shannon diversity of countries' imports
+con_shannon <- consumption_sciname %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
+  group_by(consumer_iso3c, genus) %>%
+  summarize(genus_total = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(genus_total_country = sum(genus_total)) %>%
   ungroup() %>%
-  select(eez_name, shannon)
+  mutate(pi = genus_total / genus_total_country, pi_lnpi = pi * log(pi)) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(shannon = -sum(pi_lnpi))
 
-# Join datasets
-con_joined <- left_join(con_weight, con_shannon, by = "eez_name")
+# Percentage of countries that report to species
+con_actual_species <- consumption %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(prop_actual_species = sum(grepl(" ", sciname) / n()))
 
-# Sort countries in alphabetical order
-con_joined %>%
-  arrange(-desc(eez_name))
 
-
-# Read in extraneous Adaptive Capacity data
-hdi <- read.csv("QuirozConnor_Chapter1_Data.csv")
+# Join quantity and diversity
+con_joined <- left_join(con_weight, con_shannon, by = "consumer_iso3c")
 
 # Add in hdi values to joined dataset
-con_joined <- left_join(con_joined, hdi, by = "eez_name")
+con_joined <- left_join(con_joined, hdi, by = "consumer_iso3c")
+
+# Add in proportion of total reports are species by country
+con_joined <- left_join(con_joined, con_actual_species, by = "consumer_iso3c")
 
 # Update joined dataset to have log transformed total weight as a variable
 con_joined <- con_joined %>%
@@ -67,277 +81,172 @@ con_joined <- con_joined %>%
 con_joined <- con_joined %>%
   mutate(
     region = case_when(
-      eez_name %in% c(
-        "Algeria",
-        "Angola",
-        "Benin",
-        "Cameroon",
-        "Cape Verde",
-        "Comoros",
-        "Congo - Brazzaville",
-        "Congo - Kinshasa",
-        "Côte d’Ivoire",
-        "Djibouti",
-        "Egypt",
-        "Equatorial Guinea",
-        "Eritrea",
-        "Gabon",
-        "Gambia",
-        "Ghana",
-        "Guinea",
-        "Guinea-Bissau",
-        "Kenya",
-        "Liberia",
-        "Libya",
-        "Madagascar",
-        "Malawi",
-        "Mali",
-        "Mauritania",
-        "Mauritius",
-        "Morocco",
-        "Mozambique",
-        "Namibia",
-        "Niger",
-        "Nigeria",
-        "São Tomé & Príncipe",
-        "Senegal",
-        "Seychelles",
-        "Sierra Leone",
-        "Somalia",
-        "South Africa",
-        "Sudan",
-        "Tanzania",
-        "Togo",
-        "Tunisia",
-        "Zambia",
-        "Zimbabwe"
-      ) ~
-        "Africa",
-      
-      eez_name %in% c(
-        "Afghanistan",
-        "Armenia",
-        "Azerbaijan",
-        "Bahrain",
-        "Bangladesh",
-        "Bhutan",
-        "Brunei",
-        "Cambodia",
-        "China",
-        "Cyprus",
-        "Georgia",
-        "India",
-        "Indonesia",
-        "Iran",
-        "Iraq",
-        "Israel",
-        "Japan",
-        "Jordan",
-        "Kazakhstan",
-        "Kuwait",
-        "Kyrgyzstan",
-        "Lebanon",
-        "Malaysia",
-        "Maldives",
-        "Mongolia",
-        "Myanmar (Burma)",
-        "Nepal",
-        "North Korea",
-        "Oman",
-        "Pakistan",
-        "Palestinian Territories",
-        "Philippines",
-        "Qatar",
-        "Russia",
-        "Saudi Arabia",
-        "Singapore",
-        "South Korea",
-        "Sri Lanka",
-        "Syria",
-        "Tajikistan",
-        "Taiwan",
-        "Thailand",
-        "Timor-Leste",
-        "Turkey",
-        "United Arab Emirates",
-        "Uzbekistan",
-        "Vietnam",
-        "Yemen"
-      ) ~
-        "Asia",
-      
-      eez_name %in% c(
-        "Albania",
-        "Belgium",
-        "Bosnia & Herzegovina",
-        "Bulgaria",
-        "Croatia",
-        "Cyprus",
-        "Denmark",
-        "Estonia",
-        "Finland",
-        "France",
-        "Germany",
-        "Greece",
-        "Iceland",
-        "Ireland",
-        "Italy",
-        "Latvia",
-        "Lebanon",
-        "Lithuania",
-        "Luxembourg",
-        "Malta",
-        "Montenegro",
-        "Netherlands",
-        "Norway",
-        "Poland",
-        "Portugal",
-        "Romania",
-        "Russia",
-        "Slovenia",
-        "Spain",
-        "Sweden",
-        "Switzerland",
-        "United Kingdom",
-        "Ukraine"
-      ) ~
-        "Europe",
-      
-      eez_name %in% c(
-        "Antigua & Barbuda",
-        "Bahamas",
-        "Barbados",
-        "Belize",
-        "Canada",
-        "Costa Rica",
-        "Cuba",
-        "Dominica",
-        "Dominican Republic",
-        "Ecuador",
-        "El Salvador",
-        "Grenada",
-        "Guatemala",
-        "Haiti",
-        "Honduras",
-        "Jamaica",
-        "Mexico",
-        "Montserrat",
-        "Nicaragua",
-        "Panama",
-        "St. Kitts & Nevis",
-        "St. Lucia",
-        "St. Vincent & Grenadines",
-        "Trinidad & Tobago",
-        "United States"
-      ) ~
-        "North America",
-      
-      eez_name %in% c(
-        "Argentina",
-        "Brazil",
-        "Chile",
-        "Colombia",
-        "Ecuador",
-        "Guyana",
-        "Paraguay",
-        "Peru",
-        "Suriname",
-        "Uruguay",
-        "Venezuela"
-      ) ~
-        "South America",
-      
-      eez_name %in% c(
-        "Australia",
-        "Fiji",
-        "Kiribati",
-        "Micronesia (Federated States of)",
-        "Nauru",
-        "New Zealand",
-        "Palau",
-        "Papua New Guinea",
-        "Samoa",
-        "Solomon Islands",
-        "Tonga",
-        "Tuvalu",
-        "Vanuatu"
-      ) ~
-        "Oceania",
-      
-      TRUE ~ "Unknown"
-    )
+    consumer_iso3c %in% c("DZA", "AGO", "BEN", "CMR", "CPV", "COM", "COG", "COD", "CIV", "DJI", "EGY", "GNQ", "ERI", "GAB", "GMB", "GHA", "GIN", "GNB", "KEN", "LBR", "LBY", "MDG", "MWI", "MLI", "MRT", "MUS", "MAR", "MOZ", "NAM", "NER", "NGA", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SDN", "TZA", "TGO", "TUN", "ZMB", "ZWE", "BFA", "BWA", "CAF", "LSO", "BDI", "RWA", "UGA", "SWZ", "TCD", "ETH", "SSD", "NEI") ~ "Africa",
+    consumer_iso3c %in% c("AFG", "ARM", "AZE", "BHR", "BGD", "BTN", "BRN", "KHM", "CHN", "CYP", "GEO", "IND", "IDN", "IRN", "IRQ", "ISR", "JPN", "JOR", "KAZ", "KWT", "KGZ", "LBN", "MYS", "MDV", "MNG", "MMR", "NPL", "PRK", "OMN", "PAK", "PSE", "PHL", "QAT", "RUS", "SAU", "SGP", "KOR", "LKA", "SYR", "TJK", "TWN", "THA", "TLS", "TUR", "ARE", "UZB", "VNM", "YEM", "LAO", "TKM") ~ "Asia",
+    consumer_iso3c %in% c("ALB", "BEL", "BIH", "BGR", "HRV", "DNK", "EST", "FIN", "FRA", "DEU", "GRC", "ISL", "IRL", "ITA", "LVA", "LTU", "LUX", "MLT", "MNE", "NLD", "NOR", "POL", "PRT", "ROU", "SVK", "SVN", "ESP", "SWE", "CHE", "GBR", "UKR", "BLR", "CZE", "AUT", "SRB", "HUN", "MKD", "MDA") ~ "Europe",
+    consumer_iso3c %in% c("ATG", "BHS", "BRB", "BLZ", "CAN", "CRI", "CUB", "DMA", "DOM", "ECU", "SLV", "GRD", "GTM", "HTI", "HND", "JAM", "MEX", "MSR", "NIC", "PAN", "KNA", "LCA", "VCT", "TTO", "USA") ~ "North America",
+    consumer_iso3c %in% c("ARG", "BRA", "CHL", "COL", "ECU", "GUY", "PRY", "PER", "SUR", "URY", "VEN", "BOL") ~ "South America",
+    consumer_iso3c %in% c("AUS", "FJI", "KIR", "FSM", "NRU", "NZL", "PLW", "PNG", "WSM", "SLB", "TON", "TUV", "VUT", "MHL") ~ "Oceania",
+    TRUE ~ "Unknown"
+)
   )
 
 # Consumption data without NA's (for correlation plots)
 con_na_removed <- con_joined %>%
   drop_na()
+
+# Sort countries in alphabetical order
+con_joined %>%
+  arrange(-desc(consumer_iso3c))
+
+# Prints out number of unique values per phylogenetic group
+for (i in 10:17) {
+  print(c(length(unique(consumption_sciname[,i])), names(consumption_sciname)[i]))
+}
+
+# Store phylogenetic levels in a vector
+levels <- c()
+for (i in 10:17) {
+  levels <- c(levels, print(c(names(consumption_sciname)[i])))
+}
+
+
+length(con_joined$consumer_iso3c)
 ```
+
+```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
+for (i in levels) {
+  # Shannon diversity of countries' imports
+  con_iteration <- consumption_sciname %>%
+    filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
+    group_by(consumer_iso3c,!!sym(i)) %>%
+    summarize(genus_total = sum(live_weight_t)) %>%
+    group_by(consumer_iso3c) %>%
+    mutate(genus_total_country = sum(genus_total)) %>%
+    ungroup() %>%
+    mutate(pi = genus_total / genus_total_country,
+           pi_lnpi = pi * log(pi)) %>%
+    group_by(consumer_iso3c) %>%
+    summarize(shannon_custom = -sum(pi_lnpi))
+  
+  # Create plot
+  plot_iteration <-
+    left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+    ggplot(aes(x = shannon_custom)) +
+    geom_histogram(color = "black") +
+    labs(x = paste0("Shannon diversity (", i, ")"), y = "Frequency") +
+    theme_light()
+  
+  boxplot_iteration <-
+    left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+    ggplot(aes(x = region, y = shannon_custom, fill = region)) +
+    geom_violin(alpha = 0.5) +
+    geom_point() +
+    labs(x = "", y = paste0("Shannon diversity (", i, ")")) +
+    guides(fill = "none") +
+    scale_fill_viridis_d(end = 0.9) +
+    theme_light()
+  
+  scatterplot_iteration<- 
+    left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+    ggplot(aes(x = log(total_weight), y = shannon_custom, color = hdi)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    scale_color_viridis_c() +
+    facet_wrap(~ region) +
+    theme_light() +
+    labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (genus)", color = "HDI")
+  
+  # Print plot
+  print(plot_iteration)
+  print(boxplot_iteration)
+  print(scatterplot_iteration)
+  
+  # Shannon sd
+  shannon_sd <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% sd()
+  print(paste0(i, " standard deviation: ", signif(shannon_sd,3)))
+}
+
+
+
+```
+
 
 # Data visualization + Analysis
 
 ```{r data visualization + analysis}
 # Top 10 total seafood weights by country
-plot_1 <- con_joined %>%
+(plot_1 <- con_joined %>%
   arrange(desc(total_weight)) %>%
-  select(eez_name, total_weight) %>%
+  select(consumer_iso3c, total_weight) %>%
   top_n(10) %>%
   ggplot(aes(x = total_weight, 
-             y = fct_reorder(eez_name, desc(-total_weight)))) +
+             y = fct_reorder(consumer_iso3c, desc(-total_weight)))) +
   geom_col() +
-  labs(x = "Total seafood weight (tons)", y = "Country EEZ") +
-  theme_light()
+  labs(x = "Total seafood weight (tons)", y = "Consuming country (imports)") +
+  theme_light())
 
-# Seafood weight by region
-plot_2 <- con_joined %>%
+# Shannon diversity by region
+(plot_2 <- con_joined %>%
   ggplot(aes(x = region, y = log(total_weight), fill = region)) +
   geom_violin(alpha = 0.5) +
   geom_point() +
   scale_fill_viridis_d(end = 0.9) +
   theme_light() +
   guides(fill = "none") +
-  labs(x = "", y = "Shannon diversity")
+  labs(x = "", y = "Log transformed total\nseafood weight (tons)"))
 
 # Top 10 most diverse seafood by country 
-plot_3 <- con_joined %>%
+(plot_3 <- con_joined %>%
   arrange(desc(shannon)) %>%
-  select(eez_name, shannon) %>%
+  select(consumer_iso3c, shannon) %>%
   top_n(10) %>%
   ggplot(aes(x = shannon, 
-             y = fct_reorder(eez_name, desc(-shannon)))) +
+             y = fct_reorder(consumer_iso3c, desc(-shannon)))) +
   geom_col() +
-  labs(x = "Shannon Diversity", y = "Country EEZ") +
-  theme_light()
+  labs(x = "Shannon Diversity", y = "Consuming country (imports)") +
+  theme_light())
 
 # Seafood diversity by region
-plot_4 <- con_joined %>%
+(plot_4 <- con_joined %>%
   ggplot(aes(x = region, y = shannon, fill = region)) +
   geom_violin(alpha = 0.5) +
   geom_point() +
   scale_fill_viridis_d(end = 0.9) +
   theme_light() +
   guides(fill = "none") +
-  labs(x = "", y = "Log transformed total\nseafood weight (tons)")
+  labs(x = "", y = "Shannon diversity (genus)"))
 
 # Relationship between shannon diversity and the total weight by country
-plot_5 <- con_joined %>%
+(plot_5 <- con_joined %>%
   ggplot(aes(x = log(total_weight), y = shannon, color = hdi)) +
   geom_point() +
   geom_smooth(method = "lm", se = FALSE) +
   scale_color_viridis_c() +
   facet_wrap(~ region) +
   theme_light() +
-  labs(x = "Log transformed total seafood weight (tons)", y = "Shannon", color = "HDI")
+  labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (genus)", color = "HDI"))
+
+# HDI vs proportion that are actual species
+(propspecies_versus_hdi <- con_joined %>%
+  ggplot(aes(x = hdi, y = prop_actual_species, color = region, size = shannon)) +
+  scale_color_viridis_d(end = 0.95) +
+  geom_point() +
+  theme_light() +
+  labs(color = "", x = "Human Development Index", y = "Proportion of imports\nreported to species", size = "Shannon diversity (genus)") +
+  scale_size(range = c(0,2)))
 
 # Correlations between variables (plots + pearson)
 pairs(con_na_removed[c(3:5)])
 cor(con_na_removed[c(3:5)])
 
 # Linear model between weight
-weight_shannon_lm <- lm(shannon ~ log(total_weight), data = con_joined)
+weight_shannon_lm <- lm(shannon ~ log(total_weight) + region * log(total_weight), data = con_joined)
 summary(weight_shannon_lm)
 
 # Testing out normalizing data - potentially might need to regularize if data is not normally distrubted.
 hist((log(con_na_removed$total_weight) - min(log(con_na_removed$total_weight))) / (max(log(con_na_removed$total_weight)) - min(log(con_na_removed$total_weight))))
+countrycode(con_joined$consumer_iso3c, "iso3c", "region")
 ```
 
 > Takeaways: Little correlation between hdi and total weight + shannon diversity, but stronger, positive correlation between weight and shannon diversity (as seen in correlatnion + scatter plots)
@@ -346,22 +255,10 @@ hist((log(con_na_removed$total_weight) - min(log(con_na_removed$total_weight))) 
 
 ```{r}
 # Save images
-ggsave("plot_1.jpg", plot = plot_1, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("plot_2.jpg", plot = plot_2, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("plot_3.jpg", plot = plot_3, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("plot_4.jpg", plot = plot_4, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("plot_5.jpg", plot = plot_5, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/plot_1.jpg", plot = plot_1, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/plot_2.jpg", plot = plot_2, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/plot_3.jpg", plot = plot_3, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/plot_4.jpg", plot = plot_4, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/plot_5.jpg", plot = plot_5, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/propspecies_versus_hdi.jpg", plot = propspecies_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
 ```
-
-# Dummy data testing to work with big joined datset
-
-```{r dummy data to test functions on actual dataset}
-data.frame(x = c("bird", "bird", "fish", "fish", "fish", "goat", "goat"), y = c("US", "US", "US", "China", "China", "China", "China")) %>%
-  group_by(x, y) %>%
-  mutate(individual_abundance = length(x)) %>%
-  distinct(x, y, .keep_all = TRUE) %>%  # Remove duplicate species-country combinations
-  group_by(y) %>%  # Group by country
-  mutate(total_abundance = sum(individual_abundance), pi = individual_abundance / total_abundance, shannon = -sum(pi * log(pi)))
-```
-
-
