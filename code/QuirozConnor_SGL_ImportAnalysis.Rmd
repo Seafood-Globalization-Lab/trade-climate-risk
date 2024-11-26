@@ -36,10 +36,10 @@ for (i in 1:length(hdi$consumer_iso3c)) {
 
 # Variable names for consumption
 names(consumption)
-
+grepl(" ", consumption$sciname)
 # Looking at total weights per country (aggregating species weight in 2019)
 con_weight <- consumption %>%
-  filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c & grepl(" ", sciname)) %>%
   group_by(consumer_iso3c) %>%
   mutate(live_weight_t = as.numeric(live_weight_t)) %>%
   summarize(total_weight = sum(live_weight_t)) %>%
@@ -47,7 +47,7 @@ con_weight <- consumption %>%
 
 # Shannon diversity of countries' imports
 con_shannon <- consumption_sciname %>%
-  filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c & grepl(" ", sciname)) %>%
   group_by(consumer_iso3c, genus) %>%
   summarize(genus_total = sum(live_weight_t)) %>%
   group_by(consumer_iso3c) %>%
@@ -109,9 +109,6 @@ levels <- c()
 for (i in 10:17) {
   levels <- c(levels, print(c(names(consumption_sciname)[i])))
 }
-
-
-length(con_joined$consumer_iso3c)
 ```
 
 ```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
@@ -164,19 +161,28 @@ for (i in levels) {
   
   # Shannon sd
   shannon_sd <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% sd()
-  print(paste0(i, " standard deviation: ", signif(shannon_sd,3)))
+  # print(paste0(i, " standard deviation: ", signif(shannon_sd, 3)))
+  
+  # Shannon max/min
+  shannon_max <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% max()
+  shannon_min <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% min()
+  print(paste0(i, " shannon [min, max]: [", round(shannon_min, 2), ", ", round(shannon_max, 2), "]"))
 }
-
-
-
 ```
 
 
 # Data visualization + Analysis
 
 ```{r data visualization + analysis}
+# Shannon histogram
+con_joined %>%
+    ggplot(aes(x = shannon)) +
+    geom_histogram(color = "black") +
+    labs(x = "Shannon diversity (species)", y = "Frequency") +
+    theme_light()
+
 # Top 10 total seafood weights by country
-(plot_1 <- con_joined %>%
+(country_weights <- con_joined %>%
   arrange(desc(total_weight)) %>%
   select(consumer_iso3c, total_weight) %>%
   top_n(10) %>%
@@ -187,7 +193,7 @@ for (i in levels) {
   theme_light())
 
 # Shannon diversity by region
-(plot_2 <- con_joined %>%
+(violin_weight <- con_joined %>%
   ggplot(aes(x = region, y = log(total_weight), fill = region)) +
   geom_violin(alpha = 0.5) +
   geom_point() +
@@ -197,7 +203,7 @@ for (i in levels) {
   labs(x = "", y = "Log transformed total\nseafood weight (tons)"))
 
 # Top 10 most diverse seafood by country 
-(plot_3 <- con_joined %>%
+(country_diversities <- con_joined %>%
   arrange(desc(shannon)) %>%
   select(consumer_iso3c, shannon) %>%
   top_n(10) %>%
@@ -208,24 +214,24 @@ for (i in levels) {
   theme_light())
 
 # Seafood diversity by region
-(plot_4 <- con_joined %>%
+(violin_shannon <- con_joined %>%
   ggplot(aes(x = region, y = shannon, fill = region)) +
   geom_violin(alpha = 0.5) +
   geom_point() +
   scale_fill_viridis_d(end = 0.9) +
   theme_light() +
   guides(fill = "none") +
-  labs(x = "", y = "Shannon diversity (genus)"))
+  labs(x = "", y = "Shannon diversity (species)"))
 
 # Relationship between shannon diversity and the total weight by country
-(plot_5 <- con_joined %>%
+(shannon_versus_weight <- con_joined %>%
   ggplot(aes(x = log(total_weight), y = shannon, color = hdi)) +
   geom_point() +
   geom_smooth(method = "lm", se = FALSE) +
   scale_color_viridis_c() +
   facet_wrap(~ region) +
   theme_light() +
-  labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (genus)", color = "HDI"))
+  labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (species)", color = "HDI"))
 
 # HDI vs proportion that are actual species
 (propspecies_versus_hdi <- con_joined %>%
@@ -236,9 +242,17 @@ for (i in levels) {
   labs(color = "", x = "Human Development Index", y = "Proportion of imports\nreported to species", size = "Shannon diversity (genus)") +
   scale_size(range = c(0,2)))
 
+ (propspecies_versus_weight <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = prop_actual_species, color = region, size = hdi)) +
+  scale_color_viridis_d(end = 0.95) +
+  geom_point()+
+  theme_light() +
+  labs(color = "", x = "Log transformed total\nseafood weight (tons)", y = "Proportion of imports\nreported to species", size = "HDI") +
+  scale_size(range = c(0,2)))
+
 # Correlations between variables (plots + pearson)
-pairs(con_na_removed[c(3:5)])
-cor(con_na_removed[c(3:5)])
+pairs(con_na_removed[c(3:6)])
+cor(con_na_removed[c(3:6)])
 
 # Linear model between weight
 weight_shannon_lm <- lm(shannon ~ log(total_weight) + region * log(total_weight), data = con_joined)
@@ -255,10 +269,11 @@ countrycode(con_joined$consumer_iso3c, "iso3c", "region")
 
 ```{r}
 # Save images
-ggsave("../images/plot_1.jpg", plot = plot_1, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/plot_2.jpg", plot = plot_2, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/plot_3.jpg", plot = plot_3, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/plot_4.jpg", plot = plot_4, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/plot_5.jpg", plot = plot_5, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/country_weights.jpg", plot = country_weights, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/violin_weight.jpg", plot = violin_weight, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/country_diversities.jpg", plot = country_diversities, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/violin_shannon.jpg", plot = violin_shannon, device = "jpeg", height = 3, width = 5, units = "in")
+ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, device = "jpeg", height = 3, width = 5, units = "in")
 ggsave("../images/propspecies_versus_hdi.jpg", plot = propspecies_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
+ggsave("../images/propspecies_versus_weight.jpg", plot = propspecies_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
 ```
