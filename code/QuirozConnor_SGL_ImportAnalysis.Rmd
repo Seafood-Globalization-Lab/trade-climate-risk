@@ -24,6 +24,19 @@ sciname <- read.csv("../data/sciname.csv")
 # Combine consumption and taxonomic data
 consumption_sciname <- left_join(consumption, sciname, by = "sciname")
 
+consumption_sciname <- consumption_sciname %>%
+  mutate(taxa_level = case_when(
+    sciname == kingdom ~ "kingdom",
+    sciname == phylum ~ "phylum",
+    sciname == superclass ~ "superclass",
+    sciname == class ~ "class",
+    sciname == order ~ "order",
+    sciname == family ~ "family",
+    sciname == subfamily ~ "subfamily",
+    sciname == genus ~ "genus",
+    str_detect(sciname, pattern = "\ ") ~ "species"
+  ))
+
 # Read in  Adaptive Capacity data
 hdi <- read.csv("../data/hdi.csv")
 hdi <- hdi %>%
@@ -36,10 +49,10 @@ for (i in 1:length(hdi$consumer_iso3c)) {
 
 # Variable names for consumption
 names(consumption)
-grepl(" ", consumption$sciname)
+
 # Looking at total weights per country (aggregating species weight in 2019)
 con_weight <- consumption %>%
-  filter(year == 2019 & consumer_iso3c != producer_iso3c & grepl(" ", sciname)) %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c & str_detect(sciname, pattern = "\ ")) %>%
   group_by(consumer_iso3c) %>%
   mutate(live_weight_t = as.numeric(live_weight_t)) %>%
   summarize(total_weight = sum(live_weight_t)) %>%
@@ -47,7 +60,7 @@ con_weight <- consumption %>%
 
 # Shannon diversity of countries' imports
 con_shannon <- consumption_sciname %>%
-  filter(year == 2019 & consumer_iso3c != producer_iso3c & grepl(" ", sciname)) %>%
+  filter(year == 2019 & consumer_iso3c != producer_iso3c & str_detect(sciname, pattern = "\ ")) %>%
   group_by(consumer_iso3c, genus) %>%
   summarize(genus_total = sum(live_weight_t)) %>%
   group_by(consumer_iso3c) %>%
@@ -57,18 +70,43 @@ con_shannon <- consumption_sciname %>%
   group_by(consumer_iso3c) %>%
   summarize(shannon = -sum(pi_lnpi))
 
-# Percentage of countries that report to species
-con_actual_species <- consumption %>%
-  filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
-  group_by(consumer_iso3c) %>%
-  summarize(prop_actual_species = sum(grepl(" ", sciname) / n()))
-
-
 # Join quantity and diversity
 con_joined <- left_join(con_weight, con_shannon, by = "consumer_iso3c")
 
 # Add in hdi values to joined dataset
 con_joined <- left_join(con_joined, hdi, by = "consumer_iso3c")
+
+# Store phylogenetic levels in a vector
+levels <- c()
+levels <- unique(consumption_sciname$taxa_level)
+
+# Remove superclass (only 1 according to taxa_level variable) and species (different analysis to get prop)
+levels <- levels[!(levels %in% c("superclass", "species", "phylum"))]
+
+for (i in levels) {
+  con_actual_group <- consumption_sciname %>%
+    filter(year == 2019) %>%
+    group_by(consumer_iso3c) %>%
+    summarize(!!paste0("prop_actual_", i) := sum(!is.na(get(i))) / n())
+  
+  # Join prop of each phylogenetic group to already joined consumption dataset
+  con_joined <-
+    left_join(con_joined, con_actual_group, by = "consumer_iso3c")
+  
+}
+
+# Add species back in
+levels <- c("species", levels)
+
+# Reorder levels in order of phylogenetic resoltuion
+levels <- c("species", "genus", "family", "order", "class")
+
+
+# Percentage of countries that report to species
+con_actual_species <- consumption %>%
+  filter(year == 2019) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(prop_actual_species = sum(grepl(" ", sciname) / n()))
 
 # Add in proportion of total reports are species by country
 con_joined <- left_join(con_joined, con_actual_species, by = "consumer_iso3c")
@@ -103,20 +141,16 @@ con_joined %>%
 for (i in 10:17) {
   print(c(length(unique(consumption_sciname[,i])), names(consumption_sciname)[i]))
 }
-
-# Store phylogenetic levels in a vector
-levels <- c()
-for (i in 10:17) {
-  levels <- c(levels, print(c(names(consumption_sciname)[i])))
-}
 ```
+
 
 ```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
 for (i in levels) {
   # Shannon diversity of countries' imports
   con_iteration <- consumption_sciname %>%
-    filter(year == 2019 & consumer_iso3c != producer_iso3c) %>%
-    group_by(consumer_iso3c,!!sym(i)) %>%
+    filter(year == 2019 &
+             consumer_iso3c != producer_iso3c & taxa_level == i) %>%
+    group_by(consumer_iso3c, sciname) %>%
     summarize(genus_total = sum(live_weight_t)) %>%
     group_by(consumer_iso3c) %>%
     mutate(genus_total_country = sum(genus_total)) %>%
@@ -126,47 +160,64 @@ for (i in levels) {
     group_by(consumer_iso3c) %>%
     summarize(shannon_custom = -sum(pi_lnpi))
   
-  # Create plot
-  plot_iteration <-
-    left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
-    ggplot(aes(x = shannon_custom)) +
-    geom_histogram(color = "black") +
-    labs(x = paste0("Shannon diversity (", i, ")"), y = "Frequency") +
-    theme_light()
-  
-  boxplot_iteration <-
-    left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
-    ggplot(aes(x = region, y = shannon_custom, fill = region)) +
-    geom_violin(alpha = 0.5) +
-    geom_point() +
-    labs(x = "", y = paste0("Shannon diversity (", i, ")")) +
-    guides(fill = "none") +
-    scale_fill_viridis_d(end = 0.9) +
-    theme_light()
-  
-  scatterplot_iteration<- 
-    left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
-    ggplot(aes(x = log(total_weight), y = shannon_custom, color = hdi)) +
-    geom_point() +
-    geom_smooth(method = "lm", se = FALSE) +
-    scale_color_viridis_c() +
-    facet_wrap(~ region) +
-    theme_light() +
-    labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (genus)", color = "HDI")
+# Create plot
+plot_iteration <-
+  left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+  ggplot(aes(x = shannon_custom)) +
+  geom_histogram(color = "black") +
+  labs(x = paste0("Shannon diversity (", i, ")"), y = "Frequency") +
+  theme_light()
+
+boxplot_iteration <-
+  left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+  ggplot(aes(x = region, y = shannon_custom, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  labs(x = "", y = paste0("Shannon diversity (", i, ")")) +
+  guides(fill = "none") +
+  scale_fill_viridis_d(end = 0.9) +
+  theme_light()
+
+propspecies_versus_hdi <- con_joined %>%
+  ggplot(aes(
+    x = hdi,
+    y = .data[[paste0("prop_actual_", i)]],
+    color = region,
+    size = shannon
+  )) +
+  scale_color_viridis_d(end = 0.95) +
+  geom_point() +
+  theme_light() +
+  labs(color = "",
+       x = "Human Development Index",
+       y = paste0("Proportion of production\nreported to ", i),
+       size = paste0("Shannon diversity (", i, ")")) +
+  scale_size(range = c(0, 2))
+
+propspecies_versus_weight <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_actual_", i)]], color = region, size = hdi)) +
+  scale_color_viridis_d(end = 0.95) +
+  geom_point()+
+  theme_light() +
+  labs(color = "", x = "Log transformed total\nseafood weight (tons)", y = paste0("Proportion of production\nreported to ", i), size = "HDI") +
+  scale_size(range = c(0,2))
   
   # Print plot
   print(plot_iteration)
   print(boxplot_iteration)
-  print(scatterplot_iteration)
-  
+
   # Shannon sd
   shannon_sd <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% sd()
   # print(paste0(i, " standard deviation: ", signif(shannon_sd, 3)))
-  
+
   # Shannon max/min
-  shannon_max <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% max()
-  shannon_min <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% min()
+  shannon_max <- con_iteration %>% pull(shannon_custom) %>% max()
+  shannon_min <- con_iteration %>% pull(shannon_custom) %>% min()
   print(paste0(i, " shannon [min, max]: [", round(shannon_min, 2), ", ", round(shannon_max, 2), "]"))
+  print(con_iteration)
+  
+  ggsave(paste0("../images/prop_",i , "_versus_hdi.jpg"), plot = propspecies_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_",i , "_versus_weight.jpg"), plot = propspecies_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
 }
 ```
 
@@ -242,7 +293,7 @@ con_joined %>%
   labs(color = "", x = "Human Development Index", y = "Proportion of imports\nreported to species", size = "Shannon diversity (genus)") +
   scale_size(range = c(0,2)))
 
- (propspecies_versus_weight <- con_joined %>%
+(propspecies_versus_weight <- con_joined %>%
   ggplot(aes(x = log(total_weight), y = prop_actual_species, color = region, size = hdi)) +
   scale_color_viridis_d(end = 0.95) +
   geom_point()+
