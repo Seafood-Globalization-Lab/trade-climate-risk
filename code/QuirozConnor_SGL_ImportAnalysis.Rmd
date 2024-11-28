@@ -10,11 +10,57 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(ggformula)
 library(countrycode)
+library(data.table)
 ```
 
 # Data Cleaning
 
-```{r data cleaning}
+```{r preprocess future climatedata}
+# Get list of files for future projections on EACH species
+file_names <- list.files(path = "../data/species/", pattern = "\\.csv", full.names = TRUE)
+
+# Obtain species lookup key (will be used in loop join)
+species_names <- fread("../data/dbem_spp_list.csv")
+
+# initiate empty df
+df <- data.frame()
+
+for (i in 1:length(file_names)) {
+  # Read in i'th species file in loop
+  df_i <- fread(file_names[i])
+  
+  # rename species variable to taxon_key to a join can work
+  df_i <- df_i %>%
+    rename(taxon_key = "species")
+  
+  df_i <- left_join(df_i, species_names, by = "taxon_key")
+  
+  # Select only certain variables for certain years and pivot wider
+  df_i <- df_i %>%
+    filter(year %in% c(2030, 2050, 2100)) %>%
+    mutate(year_ssp = paste0(year, ssp), sciname = tolower(paste(genus, species))) %>%
+    select(sciname, eez_name, year_ssp, mean_per_change) %>%
+    pivot_wider(names_from = year_ssp, values_from = mean_per_change)
+  
+  # Combine all species observations into one file
+  df <- df %>%
+    bind_rows(df_i)
+}
+
+# Convert eez variable countries to iso3c codes
+for (i in 1:length(df$eez_name)) {
+  df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
+}
+
+# Rename country variable so it can be joined
+df <- df %>%
+  rename(eez_iso3c = "eez_name")
+
+# See how many countries were not matches
+sum(is.na(df$eez_iso3c))
+```
+
+```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
 consumption <- read.csv("../data/example_consumption_eez_2024_11_15.csv")
 
@@ -24,6 +70,10 @@ sciname <- read.csv("../data/sciname.csv")
 # Combine consumption and taxonomic data
 consumption_sciname <- left_join(consumption, sciname, by = "sciname")
 
+# Join consumption dataset to future climate data
+consumption_sciname <- left_join(consumption_sciname, df, by = c("eez_iso3c", "sciname"))
+
+# Create phylogenetic variables
 consumption_sciname <- consumption_sciname %>%
   mutate(taxa_level = case_when(
     sciname == kingdom ~ "kingdom",
@@ -39,8 +89,10 @@ consumption_sciname <- consumption_sciname %>%
 
 # Read in  Adaptive Capacity data
 hdi <- read.csv("../data/hdi.csv")
+
 hdi <- hdi %>%
-  rename(consumer_iso3c = "country")
+  rename(consumer_iso3c = "country") %>%
+  select(-date_obtained)
 
 # Convert country names to iso3c codes
 for (i in 1:length(hdi$consumer_iso3c)) {
@@ -143,7 +195,7 @@ for (i in 10:17) {
 }
 ```
 
-
+# Data visualization
 ```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
 for (i in levels) {
   # Shannon diversity of countries' imports
