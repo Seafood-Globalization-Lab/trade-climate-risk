@@ -11,6 +11,7 @@ library(tidyverse)
 library(ggformula)
 library(countrycode)
 library(data.table)
+library(arrow)
 
 # Load in packages needed for ARTIS
 library(devtools)
@@ -20,19 +21,21 @@ library(ggsankey)
 devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
 library(exploreARTIS)
 
-install.packages('duckdb', repos = c('https://duckdb.r-universe.dev', 'https://cloud.r-project.org'), force=TRUE)
 
 
 # For fishbase
+remotes::install_github("ropensci/rfishbase")
 library(rfishbase)
-library(DBI)
-library(duckdb)
-con <- dbConnect(duckdb::duckdb())
-dbExecute(con, "INSTALL 'httpfs' VERSION 'latest';")
-dbExecute(con, "INSTALL 'fts';")
-dbExecute(con, "LOAD 'fts';")
-dbExecute(con, "INSTALL 'httpfs';")
-dbExecute(con, "LOAD 'httpfs';")
+fb_tbl("ecosystem")
+# library(DBI)
+# install.packages('duckdb', repos = c('https://duckdb.r-universe.dev', 'https://cloud.r-project.org'), force=TRUE)
+# library(duckdb)
+# con <- dbConnect(duckdb::duckdb())
+# dbExecute(con, "INSTALL 'httpfs' VERSION 'latest';")
+# dbExecute(con, "INSTALL 'fts';")
+# dbExecute(con, "LOAD 'fts';")
+# dbExecute(con, "INSTALL 'httpfs';")
+# dbExecute(con, "LOAD 'httpfs';")
 ```
 
 # Data Cleaning
@@ -93,7 +96,7 @@ countrycode('Persian Gulf', origin = 'country.name', destination = 'iso3c')
 
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
-consumption <- read.csv("../data/example_consumption_eez_2024_11_15.csv")
+consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
 consumption <- consumption %>%
   filter(year == 2019)
 
@@ -300,7 +303,8 @@ prop_exactly_taxalevel_versus_hdi <- con_joined %>%
        size = paste0("Shannon diversity (", i, ")")) +
   scale_size(range = c(0, 2)) +
   ylim(0.0, 1.0) +
-  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5)
+  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_exactly, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
 
 prop_exactly_taxalevel_versus_weight <- con_joined %>%
   ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_exactly_", i)]], color = region, size = hdi)) +
@@ -310,7 +314,8 @@ prop_exactly_taxalevel_versus_weight <- con_joined %>%
   labs(color = "", x = "Log transformed total consumed \nseafood weight (tons)", y = paste0("Proportion of production\nreported to exactly ", i), size = "HDI") +
   scale_size(range = c(0,2)) +
   ylim(0.0, 1.0) +
-  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5)
+  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_exactly, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
 
 prop_at_least_taxalevel_versus_hdi <- con_joined %>%
   ggplot(aes(
@@ -328,7 +333,8 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
        size = paste0("Shannon diversity (", i, ")")) +
   scale_size(range = c(0, 2)) +
   ylim(0.0, 1.0) +
-  geom_abline(aes(intercept = median_value_at_least, slope = 0), linetype = 2, size = 1.1, alpha = 0.5)
+  geom_abline(aes(intercept = median_value_at_least, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_at_least, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
   
   # Print plot
   print(plot_iteration)
