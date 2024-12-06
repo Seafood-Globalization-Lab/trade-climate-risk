@@ -11,7 +11,28 @@ library(tidyverse)
 library(ggformula)
 library(countrycode)
 library(data.table)
+
+# Load in packages needed for ARTIS
+library(devtools)
+library(tidytext)
+devtools::install_github("davidsjoberg/ggsankey")
+library(ggsankey)
+devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
+library(exploreARTIS)
+
+install.packages('duckdb', repos = c('https://duckdb.r-universe.dev', 'https://cloud.r-project.org'), force=TRUE)
+
+
+# For fishbase
 library(rfishbase)
+library(DBI)
+library(duckdb)
+con <- dbConnect(duckdb::duckdb())
+dbExecute(con, "INSTALL 'httpfs' VERSION 'latest';")
+dbExecute(con, "INSTALL 'fts';")
+dbExecute(con, "LOAD 'fts';")
+dbExecute(con, "INSTALL 'httpfs';")
+dbExecute(con, "LOAD 'httpfs';")
 ```
 
 # Data Cleaning
@@ -48,6 +69,8 @@ for (i in 1:length(file_names)) {
     bind_rows(df_i)
 }
 
+df_preprocessed <- df
+
 # Convert eez variable countries to iso3c codes
 for (i in 1:length(df$eez_name)) {
   df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
@@ -59,26 +82,14 @@ df <- df %>%
 
 # See how many countries were not matches
 sum(is.na(df$eez_iso3c))
+
+# Number of countries that properly got matched
+length(unique(df$eez_iso3c))
+
+# See which countries weren't properly matched
+unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
+countrycode('Persian Gulf', origin = 'country.name', destination = 'iso3c')
 ```
-
-```{r}
-future_species_codes <- species_names %>%
-  rename(sciname = "taxon_name") %>%
-  mutate(sciname = tolower(sciname))
-
-sciname_test <- left_join(species_names_renamed, sciname, by = "sciname")
-consumption_sciname_test <- left_join(consumption, future_species_codes, by = "sciname")
-
-length(unique(consumption_sciname_test$taxon_key))
-length(unique(consumption$sciname))
-length(unique(species_names_renamed$sciname))
-
-consumption_sciname_test
-
-length(future_species_codes$sciname)
-sum(str_detect(future_species_codes$sciname, pattern = "\ "), na.rm = TRUE)
-```
-
 
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
@@ -91,9 +102,6 @@ sciname <- read.csv("../data/sciname.csv")
 
 # Combine consumption and taxonomic data
 consumption_sciname <- left_join(consumption, sciname, by = "sciname")
-
-# Join consumption dataset to future climate data
-# consumption_sciname <- left_join(consumption_sciname, df, by = c("eez_iso3c", "sciname")
 
 # Create phylogenetic variables
 consumption_sciname <- consumption_sciname %>%
@@ -109,17 +117,8 @@ consumption_sciname <- consumption_sciname %>%
     str_detect(sciname, pattern = "\ ") ~ "species"
   ))
 
-consumption_sciname <- consumption_sciname %>% mutate(
-    region = case_when(
-    consumer_iso3c %in% c("DZA", "AGO", "BEN", "CMR", "CPV", "COM", "COG", "COD", "CIV", "DJI", "EGY", "GNQ", "ERI", "GAB", "GMB", "GHA", "GIN", "GNB", "KEN", "LBR", "LBY", "MDG", "MWI", "MLI", "MRT", "MUS", "MAR", "MOZ", "NAM", "NER", "NGA", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SDN", "TZA", "TGO", "TUN", "ZMB", "ZWE", "BFA", "BWA", "CAF", "LSO", "BDI", "RWA", "UGA", "SWZ", "TCD", "ETH", "SSD", "NEI") ~ "Africa",
-    consumer_iso3c %in% c("AFG", "ARM", "AZE", "BHR", "BGD", "BTN", "BRN", "KHM", "CHN", "CYP", "GEO", "IND", "IDN", "IRN", "IRQ", "ISR", "JPN", "JOR", "KAZ", "KWT", "KGZ", "LBN", "MYS", "MDV", "MNG", "MMR", "NPL", "PRK", "OMN", "PAK", "PSE", "PHL", "QAT", "RUS", "SAU", "SGP", "KOR", "LKA", "SYR", "TJK", "TWN", "THA", "TLS", "TUR", "ARE", "UZB", "VNM", "YEM", "LAO", "TKM") ~ "Asia",
-    consumer_iso3c %in% c("ALB", "BEL", "BIH", "BGR", "HRV", "DNK", "EST", "FIN", "FRA", "DEU", "GRC", "ISL", "IRL", "ITA", "LVA", "LTU", "LUX", "MLT", "MNE", "NLD", "NOR", "POL", "PRT", "ROU", "SVK", "SVN", "ESP", "SWE", "CHE", "GBR", "UKR", "BLR", "CZE", "AUT", "SRB", "HUN", "MKD", "MDA") ~ "Europe",
-    consumer_iso3c %in% c("ATG", "BHS", "BRB", "BLZ", "CAN", "CRI", "CUB", "DMA", "DOM", "ECU", "SLV", "GRD", "GTM", "HTI", "HND", "JAM", "MEX", "MSR", "NIC", "PAN", "KNA", "LCA", "VCT", "TTO", "USA") ~ "North America",
-    consumer_iso3c %in% c("ARG", "BRA", "CHL", "COL", "ECU", "GUY", "PRY", "PER", "SUR", "URY", "VEN", "BOL") ~ "South America",
-    consumer_iso3c %in% c("AUS", "FJI", "KIR", "FSM", "NRU", "NZL", "PLW", "PNG", "WSM", "SLB", "TON", "TUV", "VUT", "MHL") ~ "Oceania",
-    TRUE ~ "Unknown"
-)
-  )
+consumption_sciname <- consumption_sciname %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
 
 # Read in  Adaptive Capacity data
 hdi <- read.csv("../data/hdi.csv")
@@ -169,11 +168,19 @@ levels <- unique(consumption_sciname$taxa_level)
 # Remove superclass (only 1 according to taxa_level variable) and species (different analysis to get prop)
 levels <- levels[!(levels %in% c("superclass", "species", "phylum"))]
 
+# Proportions of producing countries reporting to **at least** that taxonomic level (should be cumulative probabilities)
+# Set up whether a producing country reported to at least a certain level (1 means it could also go lower (e.g., 1 in class means it could be just class or goes all the way to species))
+consumption_sciname <- consumption_sciname %>%
+  group_by(producer_iso3c, sciname) %>%
+  mutate(at_least_genus = case_when(taxa_level == "species" | taxa_level == "genus" ~ 1, TRUE ~ 0),
+         at_least_family = case_when(taxa_level == "species" | taxa_level == "genus" | taxa_level == "family" ~ 1, TRUE ~ 0),
+         at_least_order = case_when(taxa_level == "species" | taxa_level == "genus" | taxa_level == "family" | taxa_level == "order" ~ 1, TRUE ~ 0),
+         at_least_class = case_when(taxa_level == "species" | taxa_level == "genus" | taxa_level == "family" | taxa_level == "order" | taxa_level == "class" ~ 1, TRUE ~ 0))
+
 for (i in levels) {
   con_actual_group <- consumption_sciname %>%
-    filter(year == 2019) %>%
     group_by(producer_iso3c) %>%
-    summarize(!!paste0("prop_actual_", i) := sum(!is.na(get(i))) / n()) %>%
+    summarize(!!paste0("prop_at_least_", i) := sum(!!sym(paste0("at_least_",i))) / n()) %>%
     rename(consumer_iso3c = "producer_iso3c")
   
   # Join prop of each phylogenetic group to already joined consumption dataset
@@ -182,35 +189,24 @@ for (i in levels) {
   
 }
 
-# # TRIAL REMOVE AFTER USE
-# for (i in names(consumption_sciname)[10:14]) {
-#   con_actual_group <- consumption_sciname %>%
-#     filter(!is.na(i)) %>%
-#     group_by(producer_iso3c) %>%
-#     summarize(!!paste0("prop_actual_", i) := sum(!is.na(get(i))) / n()) %>%
-#     rename(consumer_iso3c = "producer_iso3c")
-#   
-#   # Join prop of each phylogenetic group to already joined consumption dataset
-#   con_joined <-
-#     left_join(con_joined, con_actual_group, by = "producer_iso3c")
-#   
-# }
-
-# Add species back in
-levels <- c("species", levels)
-
-# Reorder levels in order of phylogenetic resoltuion
+# Add back in species
 levels <- c("species", "genus", "family", "order", "class")
 
+# Proportions of producing countries reporting to exactly that taxonomic level.
+for (i in levels) {
+  con_actual_group <- consumption_sciname %>%
+    group_by(producer_iso3c) %>%
+    summarize(!!paste0("prop_exactly_", i) := sum(taxa_level == i) / n(), .groups = "drop") %>%
+    rename(consumer_iso3c = "producer_iso3c")
+  
+  # Join props of each phylogenetic group
+  con_joined <- left_join(con_joined, con_actual_group, by = "consumer_iso3c")
+  
+}
 
-# Percentage of countries that report to species
-con_actual_species <- consumption %>%
-  filter(year == 2019) %>%
-  group_by(consumer_iso3c) %>%
-  summarize(prop_actual_species = sum(grepl(" ", sciname) / n()))
-
-# Add in proportion of total reports are species by country
-con_joined <- left_join(con_joined, con_actual_species, by = "consumer_iso3c")
+# Percentage of countries that report to species (no species column in sciname data - have to do different way from rest of taxonomic groups)
+con_joined <- con_joined %>%
+  mutate(prop_at_least_species = prop_exactly_species)
 
 # Update joined dataset to have log transformed total weight as a variable
 con_joined <- con_joined %>%
@@ -218,21 +214,15 @@ con_joined <- con_joined %>%
 
 # Add in region (e.g., North America, Asia, etc.)
 con_joined <- con_joined %>%
-  mutate(
-    region = case_when(
-    consumer_iso3c %in% c("DZA", "AGO", "BEN", "CMR", "CPV", "COM", "COG", "COD", "CIV", "DJI", "EGY", "GNQ", "ERI", "GAB", "GMB", "GHA", "GIN", "GNB", "KEN", "LBR", "LBY", "MDG", "MWI", "MLI", "MRT", "MUS", "MAR", "MOZ", "NAM", "NER", "NGA", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SDN", "TZA", "TGO", "TUN", "ZMB", "ZWE", "BFA", "BWA", "CAF", "LSO", "BDI", "RWA", "UGA", "SWZ", "TCD", "ETH", "SSD", "NEI") ~ "Africa",
-    consumer_iso3c %in% c("AFG", "ARM", "AZE", "BHR", "BGD", "BTN", "BRN", "KHM", "CHN", "CYP", "GEO", "IND", "IDN", "IRN", "IRQ", "ISR", "JPN", "JOR", "KAZ", "KWT", "KGZ", "LBN", "MYS", "MDV", "MNG", "MMR", "NPL", "PRK", "OMN", "PAK", "PSE", "PHL", "QAT", "RUS", "SAU", "SGP", "KOR", "LKA", "SYR", "TJK", "TWN", "THA", "TLS", "TUR", "ARE", "UZB", "VNM", "YEM", "LAO", "TKM") ~ "Asia",
-    consumer_iso3c %in% c("ALB", "BEL", "BIH", "BGR", "HRV", "DNK", "EST", "FIN", "FRA", "DEU", "GRC", "ISL", "IRL", "ITA", "LVA", "LTU", "LUX", "MLT", "MNE", "NLD", "NOR", "POL", "PRT", "ROU", "SVK", "SVN", "ESP", "SWE", "CHE", "GBR", "UKR", "BLR", "CZE", "AUT", "SRB", "HUN", "MKD", "MDA") ~ "Europe",
-    consumer_iso3c %in% c("ATG", "BHS", "BRB", "BLZ", "CAN", "CRI", "CUB", "DMA", "DOM", "ECU", "SLV", "GRD", "GTM", "HTI", "HND", "JAM", "MEX", "MSR", "NIC", "PAN", "KNA", "LCA", "VCT", "TTO", "USA") ~ "North America",
-    consumer_iso3c %in% c("ARG", "BRA", "CHL", "COL", "ECU", "GUY", "PRY", "PER", "SUR", "URY", "VEN", "BOL") ~ "South America",
-    consumer_iso3c %in% c("AUS", "FJI", "KIR", "FSM", "NRU", "NZL", "PLW", "PNG", "WSM", "SLB", "TON", "TUV", "VUT", "MHL") ~ "Oceania",
-    TRUE ~ "Unknown"
-)
-  )
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
 
 # Consumption data without NA's (for correlation plots)
 con_na_removed <- con_joined %>%
   drop_na()
+
+# Remove NA region
+con_joined <- con_joined %>%
+  drop_na(region)
 
 # Sort countries in alphabetical order
 con_joined %>%
@@ -243,6 +233,8 @@ for (i in 10:17) {
   print(c(length(unique(consumption_sciname[,i])), names(consumption_sciname)[i]))
 }
 
+# Join consumption dataset to future climate data
+consumption_sciname_future <- left_join(consumption_sciname, df, by = c("eez_iso3c", "sciname"))
 ```
 
 # Data visualization
@@ -277,34 +269,66 @@ boxplot_iteration <-
   geom_point() +
   labs(x = "", y = paste0("Shannon diversity (", i, ")")) +
   guides(fill = "none") +
-  scale_fill_viridis_d(end = 0.9) +
+  scale_fill_manual(values = artis_palette(length(unique(con_joined$region)))) +
   theme_light()
 
-propspecies_versus_hdi <- con_joined %>%
+# Set median value for median line in graph
+col_name_exactly <- sym(paste0("prop_exactly_", i))
+median_value_exactly <- con_joined %>%
+  summarise(median = median(!!col_name_exactly, na.rm = TRUE)) %>%
+  pull(median)
+
+# Set median value for median line in graph
+col_name_at_least <- sym(paste0("prop_at_least_", i))
+median_value_at_least <- con_joined %>%
+  summarise(median = median(!!col_name_at_least, na.rm = TRUE)) %>%
+  pull(median)
+
+prop_exactly_taxalevel_versus_hdi <- con_joined %>%
   ggplot(aes(
     x = hdi,
-    y = .data[[paste0("prop_actual_", i)]],
+    y = .data[[paste0("prop_exactly_", i)]],
     color = region,
     size = shannon
   )) +
-  scale_color_viridis_d(end = 0.95) +
+  scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
   geom_point() +
   theme_light() +
   labs(color = "",
        x = "Human Development Index",
-       y = paste0("Proportion of production\nreported to ", i),
+       y = paste0("Proportion of production\nreported to exactly ", i),
        size = paste0("Shannon diversity (", i, ")")) +
   scale_size(range = c(0, 2)) +
-  ylim(0.0, 1.0)
+  ylim(0.0, 1.0) +
+  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5)
 
-propspecies_versus_weight <- con_joined %>%
-  ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_actual_", i)]], color = region, size = hdi)) +
-  scale_color_viridis_d(end = 0.95) +
+prop_exactly_taxalevel_versus_weight <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_exactly_", i)]], color = region, size = hdi)) +
+  scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
   geom_point()+
   theme_light() +
-  labs(color = "", x = "Log transformed total\nseafood weight (tons)", y = paste0("Proportion of production\nreported to ", i), size = "HDI") +
+  labs(color = "", x = "Log transformed total consumed \nseafood weight (tons)", y = paste0("Proportion of production\nreported to exactly ", i), size = "HDI") +
   scale_size(range = c(0,2)) +
-  ylim(0.0, 1.0)
+  ylim(0.0, 1.0) +
+  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5)
+
+prop_at_least_taxalevel_versus_hdi <- con_joined %>%
+  ggplot(aes(
+    x = hdi,
+    y = .data[[paste0("prop_at_least_", i)]],
+    color = region,
+    size = shannon
+  )) +
+  scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  geom_point() +
+  theme_light() +
+  labs(color = "",
+       x = "Human Development Index",
+       y = paste0("Proportion of production\nreported to at least ", i),
+       size = paste0("Shannon diversity (", i, ")")) +
+  scale_size(range = c(0, 2)) +
+  ylim(0.0, 1.0) +
+  geom_abline(aes(intercept = median_value_at_least, slope = 0), linetype = 2, size = 1.1, alpha = 0.5)
   
   # Print plot
   print(plot_iteration)
@@ -320,8 +344,9 @@ propspecies_versus_weight <- con_joined %>%
   print(paste0(i, " shannon [min, max]: [", round(shannon_min, 2), ", ", round(shannon_max, 2), "]"))
   print(con_iteration)
   
-  ggsave(paste0("../images/prop_",i , "_versus_hdi.jpg"), plot = propspecies_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
-  ggsave(paste0("../images/prop_",i , "_versus_weight.jpg"), plot = propspecies_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_exactly_",i , "_versus_hdi.jpg"), plot = prop_exactly_taxalevel_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_exactly_",i , "_versus_weight.jpg"), plot = prop_exactly_taxalevel_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_at_least_",i , "_versus_hdi.jpg"), plot = prop_at_least_taxalevel_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
 }
 ```
 
@@ -329,13 +354,6 @@ propspecies_versus_weight <- con_joined %>%
 # Data visualization + Analysis
 
 ```{r data visualization + analysis}
-# Shannon histogram
-con_joined %>%
-    ggplot(aes(x = shannon)) +
-    geom_histogram(color = "black") +
-    labs(x = "Shannon diversity (species)", y = "Frequency") +
-    theme_light()
-
 # Top 10 total seafood weights by country
 (country_weights <- con_joined %>%
   arrange(desc(total_weight)) %>%
@@ -346,16 +364,6 @@ con_joined %>%
   geom_col() +
   labs(x = "Total seafood weight (tons)", y = "Consuming country (imports)") +
   theme_light())
-
-# Shannon diversity by region
-(violin_weight <- con_joined %>%
-  ggplot(aes(x = region, y = log(total_weight), fill = region)) +
-  geom_violin(alpha = 0.5) +
-  geom_point() +
-  scale_fill_viridis_d(end = 0.9) +
-  theme_light() +
-  guides(fill = "none") +
-  labs(x = "", y = "Log transformed total\nseafood weight (tons)"))
 
 # Top 10 most diverse seafood by country 
 (country_diversities <- con_joined %>%
@@ -368,16 +376,6 @@ con_joined %>%
   labs(x = "Shannon Diversity", y = "Consuming country (imports)") +
   theme_light())
 
-# Seafood diversity by region
-(violin_shannon <- con_joined %>%
-  ggplot(aes(x = region, y = shannon, fill = region)) +
-  geom_violin(alpha = 0.5) +
-  geom_point() +
-  scale_fill_viridis_d(end = 0.9) +
-  theme_light() +
-  guides(fill = "none") +
-  labs(x = "", y = "Shannon diversity (species)"))
-
 # Relationship between shannon diversity and the total weight by country
 (shannon_versus_weight <- con_joined %>%
   ggplot(aes(x = log(total_weight), y = shannon, color = hdi)) +
@@ -388,24 +386,8 @@ con_joined %>%
   theme_light() +
   labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (species)", color = "HDI"))
 
-# HDI vs proportion that are actual species
-(propspecies_versus_hdi <- con_joined %>%
-  ggplot(aes(x = hdi, y = prop_actual_species, color = region, size = shannon)) +
-  scale_color_viridis_d(end = 0.95) +
-  geom_point() +
-  theme_light() +
-  labs(color = "", x = "Human Development Index", y = "Proportion of imports\nreported to species", size = "Shannon diversity (genus)") +
-  scale_size(range = c(0,2)))
-
-(propspecies_versus_weight <- con_joined %>%
-  ggplot(aes(x = log(total_weight), y = prop_actual_species, color = region, size = hdi)) +
-  scale_color_viridis_d(end = 0.95) +
-  geom_point()+
-  theme_light() +
-  labs(color = "", x = "Log transformed total\nseafood weight (tons)", y = "Proportion of imports\nreported to species", size = "HDI") +
-  scale_size(range = c(0,2)))
-
-(ssp_projections <- consumption_sciname %>%
+# Future climate projections visualization
+(ssp_projections <- consumption_sciname_future %>%
   filter(year == 2019 & !is.na(`2100ssp585`)) %>%
   pivot_longer(c(`2030ssp126`, `2030ssp585`, `2050ssp126`, `2050ssp585`,`2100ssp126`, `2100ssp585`),names_to = "ssp", values_to = "percent_change_catch") %>%
   mutate(year = as.numeric(map_chr(str_split(ssp, "ssp"), 1)),
@@ -418,11 +400,9 @@ con_joined %>%
   geom_point(size = 1.3) +
   geom_line(size = 1.1) +
   facet_wrap(~ region) +
-  scale_color_viridis_d(end = 0.7) +
+  scale_color_manual(values = artis_palette(2)) +
   theme_light() +
   labs(x = "Year", color = "SSP", y = "Mean change to annual catch potential\n(Aggregated across countries + species)"))
-
-test_data[test_data$year == 2100 & test_data$percent_change_catch > 100, ]
 
 # Correlations between variables (plots + pearson)
 pairs(con_na_removed[c(3:6)])
@@ -441,14 +421,19 @@ countrycode(con_joined$consumer_iso3c, "iso3c", "region")
 
 # Save Images
 
-```{r}
+```{r Save images}
 # Save images
 ggsave("../images/country_weights.jpg", plot = country_weights, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/violin_weight.jpg", plot = violin_weight, device = "jpeg", height = 3, width = 5, units = "in")
+
 ggsave("../images/country_diversities.jpg", plot = country_diversities, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/violin_shannon.jpg", plot = violin_shannon, device = "jpeg", height = 3, width = 5, units = "in")
+
 ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, device = "jpeg", height = 3, width = 5, units = "in")
-ggsave("../images/propspecies_versus_hdi.jpg", plot = propspecies_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
-ggsave("../images/propspecies_versus_weight.jpg", plot = propspecies_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
+
 ggsave("../images/ssp_projections.jpg", plot = ssp_projections, device = "jpeg", height = 3, width = 6, units = "in")
 ```
+
+
+```{r}
+rfishbase::estimate("Oreochromis niloticus")
+```
+
