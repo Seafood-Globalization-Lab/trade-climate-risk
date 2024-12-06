@@ -7,6 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+# General data cleaning + visualization + analysis packages
 library(tidyverse)
 library(ggformula)
 library(countrycode)
@@ -21,21 +22,11 @@ library(ggsankey)
 devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
 library(exploreARTIS)
 
-
-
-# For fishbase
+# For Packages for fishbase
+remotes::install_github("cboettig/duckdbfs", force = TRUE)
 remotes::install_github("ropensci/rfishbase")
+library(duckdbfs)
 library(rfishbase)
-fb_tbl("ecosystem")
-# library(DBI)
-# install.packages('duckdb', repos = c('https://duckdb.r-universe.dev', 'https://cloud.r-project.org'), force=TRUE)
-# library(duckdb)
-# con <- dbConnect(duckdb::duckdb())
-# dbExecute(con, "INSTALL 'httpfs' VERSION 'latest';")
-# dbExecute(con, "INSTALL 'fts';")
-# dbExecute(con, "LOAD 'fts';")
-# dbExecute(con, "INSTALL 'httpfs';")
-# dbExecute(con, "LOAD 'httpfs';")
 ```
 
 # Data Cleaning
@@ -306,16 +297,16 @@ prop_exactly_taxalevel_versus_hdi <- con_joined %>%
   geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
   guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_exactly, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
 
-prop_exactly_taxalevel_versus_weight <- con_joined %>%
-  ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_exactly_", i)]], color = region, size = hdi)) +
+prop_at_least_taxalevel_versus_weight <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_at_least_", i)]], color = region, size = hdi)) +
   scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
   geom_point()+
   theme_light() +
-  labs(color = "", x = "Log transformed total consumed \nseafood weight (tons)", y = paste0("Proportion of production\nreported to exactly ", i), size = "HDI") +
+  labs(color = "", x = "Log transformed total consumed \nseafood weight (tons)", y = paste0("Proportion of production\nreported to at least ", i), size = "HDI") +
   scale_size(range = c(0,2)) +
   ylim(0.0, 1.0) +
-  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
-  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_exactly, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
+  geom_abline(aes(intercept = median_value_at_least, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_at_least, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
 
 prop_at_least_taxalevel_versus_hdi <- con_joined %>%
   ggplot(aes(
@@ -351,7 +342,7 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
   print(con_iteration)
   
   ggsave(paste0("../images/prop_exactly_",i , "_versus_hdi.jpg"), plot = prop_exactly_taxalevel_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
-  ggsave(paste0("../images/prop_exactly_",i , "_versus_weight.jpg"), plot = prop_exactly_taxalevel_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_at_least_",i , "_versus_weight.jpg"), plot = prop_at_least_taxalevel_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
   ggsave(paste0("../images/prop_at_least_",i , "_versus_hdi.jpg"), plot = prop_at_least_taxalevel_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
 }
 ```
@@ -437,9 +428,3 @@ ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, devi
 
 ggsave("../images/ssp_projections.jpg", plot = ssp_projections, device = "jpeg", height = 3, width = 6, units = "in")
 ```
-
-
-```{r}
-rfishbase::estimate("Oreochromis niloticus")
-```
-
