@@ -29,6 +29,107 @@ library(duckdbfs)
 library(rfishbase)
 ```
 
+```{r initialize functions}
+at_least_vars <- function(data) {
+  if (any(names(data) %in% "producer_iso3c")) {
+    data %>%
+      group_by(producer_iso3c, sciname) %>%
+      mutate(
+        at_least_genus = case_when(taxa_level == "species" |
+                                     taxa_level == "genus" ~ 1, TRUE ~ 0),
+        at_least_family = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" | taxa_level == "family" ~ 1,
+          TRUE ~ 0
+        ),
+        at_least_order = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" |
+            taxa_level == "family" | taxa_level == "order" ~ 1,
+          TRUE ~ 0
+        ),
+        at_least_class = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" |
+            taxa_level == "family" |
+            taxa_level == "order" | taxa_level == "class" ~ 1,
+          TRUE ~ 0
+        )
+      )
+  }
+  else {
+    data %>%
+      group_by(sciname) %>%
+      mutate(
+        at_least_genus = case_when(taxa_level == "species" |
+                                     taxa_level == "genus" ~ 1, TRUE ~ 0),
+        at_least_family = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" | taxa_level == "family" ~ 1,
+          TRUE ~ 0
+        ),
+        at_least_order = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" |
+            taxa_level == "family" | taxa_level == "order" ~ 1,
+          TRUE ~ 0
+        ),
+        at_least_class = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" |
+            taxa_level == "family" |
+            taxa_level == "order" | taxa_level == "class" ~ 1,
+          TRUE ~ 0
+        )
+      )
+  }
+}
+
+
+
+taxa_level_vars <- function(data, ungroup = FALSE) {
+  if (ungroup == FALSE) {
+    data %>%
+      mutate(
+        taxa_level = case_when(
+          sciname == kingdom ~ "kingdom",
+          sciname == phylum ~ "phylum",
+          sciname == superclass ~ "superclass",
+          sciname == class ~ "class",
+          sciname == order ~ "order",
+          sciname == family ~ "family",
+          sciname == subfamily ~ "subfamily",
+          sciname == genus ~ "genus",
+          str_detect(sciname, pattern = "\ ") ~ "species"
+        )
+      )
+  }
+  
+  else {
+    data %>%
+      ungroup() %>%
+      distinct(sciname) %>%
+      left_join(sciname, by = "sciname") %>%
+      mutate(
+        taxa_level = case_when(
+          sciname == kingdom ~ "kingdom",
+          sciname == phylum ~ "phylum",
+          sciname == superclass ~ "superclass",
+          sciname == class ~ "class",
+          sciname == order ~ "order",
+          sciname == family ~ "family",
+          sciname == subfamily ~ "subfamily",
+          sciname == genus ~ "genus",
+          str_detect(sciname, pattern = "\ ") ~ "species"
+        )
+      )
+  }
+  
+  
+}
+```
+
+
 # Data Cleaning
 
 ```{r preprocess future climatedata}
@@ -37,7 +138,7 @@ file_names <- list.files(path = "../data/species/", pattern = "\\.csv", full.nam
 
 # Obtain species lookup key (will be used in loop join)
 species_names <- fread("../data/dbem_spp_list.csv")
-
+consumption
 # initiate empty df
 df <- data.frame()
 
@@ -98,18 +199,7 @@ sciname <- read.csv("../data/sciname.csv")
 consumption_sciname <- left_join(consumption, sciname, by = "sciname")
 
 # Create phylogenetic variables
-consumption_sciname <- consumption_sciname %>%
-  mutate(taxa_level = case_when(
-    sciname == kingdom ~ "kingdom",
-    sciname == phylum ~ "phylum",
-    sciname == superclass ~ "superclass",
-    sciname == class ~ "class",
-    sciname == order ~ "order",
-    sciname == family ~ "family",
-    sciname == subfamily ~ "subfamily",
-    sciname == genus ~ "genus",
-    str_detect(sciname, pattern = "\ ") ~ "species"
-  ))
+consumption_sciname <- taxa_level_vars(consumption_sciname)
 
 consumption_sciname <- consumption_sciname %>%
   exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
@@ -164,12 +254,7 @@ levels <- levels[!(levels %in% c("superclass", "species", "phylum"))]
 
 # Proportions of producing countries reporting to **at least** that taxonomic level (should be cumulative probabilities)
 # Set up whether a producing country reported to at least a certain level (1 means it could also go lower (e.g., 1 in class means it could be just class or goes all the way to species))
-consumption_sciname <- consumption_sciname %>%
-  group_by(producer_iso3c, sciname) %>%
-  mutate(at_least_genus = case_when(taxa_level == "species" | taxa_level == "genus" ~ 1, TRUE ~ 0),
-         at_least_family = case_when(taxa_level == "species" | taxa_level == "genus" | taxa_level == "family" ~ 1, TRUE ~ 0),
-         at_least_order = case_when(taxa_level == "species" | taxa_level == "genus" | taxa_level == "family" | taxa_level == "order" ~ 1, TRUE ~ 0),
-         at_least_class = case_when(taxa_level == "species" | taxa_level == "genus" | taxa_level == "family" | taxa_level == "order" | taxa_level == "class" ~ 1, TRUE ~ 0))
+consumption_sciname <- at_least_vars(consumption_sciname)
 
 for (i in levels) {
   con_actual_group <- consumption_sciname %>%
@@ -229,6 +314,78 @@ for (i in 10:17) {
 
 # Join consumption dataset to future climate data
 consumption_sciname_future <- left_join(consumption_sciname, df, by = c("eez_iso3c", "sciname"))
+```
+
+```{r add in fishbase data connection}
+# faoareas(server = "fishbase")
+# faoareas(species_list = c(unique(species_names$taxon_name)))
+# species()
+
+# Modify sciname casing so that it can be joined to fishbase
+consumption_sciname <- consumption_sciname %>%
+  mutate(sciname_joinable_to_fishbase = str_to_title(word(sciname, 1)), 
+         sciname_joinable_to_fishbase2 = word(sciname, 2), 
+         sciname_joinable_to_fishbase = ifelse(
+        is.na(sciname_joinable_to_fishbase2),
+        sciname_joinable_to_fishbase,
+        paste(sciname_joinable_to_fishbase, sciname_joinable_to_fishbase2))) %>%
+  select(-sciname_joinable_to_fishbase2) %>%
+  relocate(sciname_joinable_to_fishbase, .after = sciname)
+
+# # of ARTIS unique ID's (includes higher taxonomic levels that aren't only species) - 2232 total IDs
+length(unique(consumption_sciname$sciname_joinable_to_fishbase))
+
+# # of ARTIS species (1780 species - shouldn't be more than Fishbase?)
+sum(str_detect(unique(na.omit(consumption_sciname$sciname)), " "))
+
+# 1320 species with sciname_hs_modified variable (This seems more right) - less than 
+sum(str_detect(unique(na.omit(consumption_sciname$sciname_hs_modified)), " "))
+
+# Unique entries in Fishbase (i.e., # of ARTIS species successfully joined to fishbase - 1382 species)
+artis_fishbase_locations <- faoareas(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)))
+
+# Total number of joined species succesfully from ARTIS
+length(unique(artis_fishbase_locations$Species))
+sum(str_detect(unique(artis_fishbase_locations$Species), " "))
+
+# Get unique taxonomic entries (no repeats)
+unique_taxonomy_entries <- taxa_level_vars(consumption_sciname, ungroup = TRUE)
+
+# Determines whether something is reported to **at least** a given taxonomic level
+unique_taxonomy_entries <- at_least_vars(unique_taxonomy_entries)
+
+# Add in species binary Yes or no
+unique_taxonomy_entries <- unique_taxonomy_entries %>%
+  mutate(at_least_species = case_when(taxa_level == "species" ~ 1, TRUE ~ 0)) %>%
+  relocate(at_least_species, .before = at_least_genus)
+
+# Count taxonomic totals
+taxa_unreported_props <- data.frame()
+taxa_unreported_quantity <- data.frame()
+for (i in levels) {
+  amount <- unique_taxonomy_entries %>%
+    ungroup() %>%
+    summarize(sum = sum(!(!!sym(paste0("at_least_",i))))) %>%
+    pull(sum)
+  total <- length(unique_taxonomy_entries$sciname)
+  prop <- amount / total
+  taxa_unreported_props <- rbind(taxa_unreported_props, list(i, round(prop, 2)))
+  taxa_unreported_quantity <- rbind(taxa_unreported_quantity, list(i, total))
+}
+
+# Rename taxa_total variables
+taxa_unreported_props <- taxa_unreported_props %>%
+  rename(taxa_level = "X.species.", prop = "X0.2")
+
+taxa_unreported_quantity <- taxa_unreported_quantity %>%
+  rename(taxa_level = "X.species.", prop = "X2232L")
+
+# Reports proportion and quantities that are not reported to a given taxonomic level.
+print(taxa_unreported_props)
+print(taxa_unreported_quantity)
+
+# View joined artis / fishbase database
+View(artis_fishbase_locations)
 ```
 
 # Data visualization
@@ -401,6 +558,34 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
   theme_light() +
   labs(x = "Year", color = "SSP", y = "Mean change to annual catch potential\n(Aggregated across countries + species)"))
 
+# Props reported by region by taxonomic resolution
+(prop_versus_tax_versus_country <- con_joined %>%
+  pivot_longer(cols = c("prop_at_least_species","prop_at_least_genus","prop_at_least_family","prop_at_least_order"), names_to = "level", values_to = "prop") %>%
+  mutate(level = str_remove(level, "prop_at_least_"), level = str_to_title(level), level = factor(level, levels = c("Order", "Family", "Genus", "Species"))) %>%
+  ggplot(aes(x = reorder(level, -prop), y = prop, fill = region)) +
+  geom_boxplot() +
+  scale_fill_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  theme_light() +
+  labs(x = "Taxonomic level", y = "Proportion of production\nreported to at least target\ntaxonomic level", fill = "Region"))
+  
+# ANOVA testing prop at least species vs region
+leveneTest(prop_at_least_species ~ region, data = con_joined)
+aov(prop_at_least_species ~ region, data = con_joined) %>% summary()
+TukeyHSD(aov(prop_at_least_species ~ region, data = con_joined))
+
+# ... genus ...
+leveneTest(prop_at_least_genus ~ region, data = con_joined)
+aov(prop_at_least_genus ~ region, data = con_joined) %>% summary()
+TukeyHSD(aov(prop_at_least_genus ~ region, data = con_joined))
+
+# ... family ...
+leveneTest(prop_at_least_family ~ region, data = con_joined)
+aov(prop_at_least_family ~ region, data = con_joined) %>% summary()
+
+# ... order ...
+leveneTest(prop_at_least_order ~ region, data = con_joined)
+aov(prop_at_least_order ~ region, data = con_joined) %>% summary()
+
 # Correlations between variables (plots + pearson)
 pairs(con_na_removed[c(3:6)])
 cor(con_na_removed[c(3:6)])
@@ -427,4 +612,6 @@ ggsave("../images/country_diversities.jpg", plot = country_diversities, device =
 ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, device = "jpeg", height = 3, width = 5, units = "in")
 
 ggsave("../images/ssp_projections.jpg", plot = ssp_projections, device = "jpeg", height = 3, width = 6, units = "in")
+
+ggsave("../images/prop_versus_tax_versus_country.jpg", plot = prop_versus_tax_versus_country, device = "jpeg", height = 4, width = 9, units = "in")
 ```
