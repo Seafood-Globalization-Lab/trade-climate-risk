@@ -138,7 +138,7 @@ file_names <- list.files(path = "../data/species/", pattern = "\\.csv", full.nam
 
 # Obtain species lookup key (will be used in loop join)
 species_names <- fread("../data/dbem_spp_list.csv")
-consumption
+
 # initiate empty df
 df <- data.frame()
 
@@ -164,6 +164,7 @@ for (i in 1:length(file_names)) {
     bind_rows(df_i)
 }
 
+# Obtain previous state on dataframe (to get unmatched)
 df_preprocessed <- df
 
 # Convert eez variable countries to iso3c codes
@@ -181,9 +182,40 @@ sum(is.na(df$eez_iso3c))
 # Number of countries that properly got matched
 length(unique(df$eez_iso3c))
 
-# See which countries weren't properly matched
-unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
-countrycode('Persian Gulf', origin = 'country.name', destination = 'iso3c')
+# Unmatched countries via countrycode
+unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
+
+# Only keep rows in preprocessed dataset that are unmatched countries
+df_preprocessed <- df_preprocessed %>%
+  filter(eez_name %in% unmatched_countries)
+
+df_postprocessed <- df_preprocessed
+
+# Get country names out of parenthesis with string detects
+for (i in seq_along(df_preprocessed$eez_name)) {
+  
+  if (xor(str_detect(df_preprocessed$eez_name[i], "\\("), str_detect(df_preprocessed$eez_name[i], "Yemen"))) {
+    split_string <- str_split(df_preprocessed$eez_name[i], "\\(")
+    split_string <- str_split(split_string[[1]][2], "\\)")
+    df_postprocessed$eez_name[i] <- split_string[[1]][1]
+  }
+  else if (str_detect(df_preprocessed$eez_name[i], "Yemen")) {
+    df_postprocessed$eez_name[i] <- str_split(df_preprocessed$eez_name[i], "\\ \\(")[[1]][1]
+  }
+  
+}
+
+# Convert previously unmatched countries to iso3c
+for (i in 1:length(df$eez_name)) {
+  df_postprocessed$eez_name[i] <- countrycode(df_postprocessed$eez_name[i], origin = 'country.name', destination = 'iso3c')
+}
+
+# Rename country variable so it can be joined
+df_postprocessed <- df_postprocessed %>%
+  rename(eez_iso3c = "eez_name")
+
+# Add in unmatched countries (now all countries are matched)
+df <- rbind(df, df_postprocessed)
 ```
 
 ```{r data cleaning for hdi + consumption data}
@@ -314,6 +346,11 @@ for (i in 10:17) {
 
 # Join consumption dataset to future climate data
 consumption_sciname_future <- left_join(consumption_sciname, df, by = c("eez_iso3c", "sciname"))
+
+length(unique(consumption_sciname$eez_iso3c))
+length(unique(df$eez_iso3c))
+mask <- unique(consumption_sciname$eez_iso3c) %in% unique(c(df$eez_iso3c))
+unique(consumption_sciname$eez_iso3c)[!mask]
 ```
 
 ```{r add in fishbase data connection}
@@ -323,8 +360,8 @@ consumption_sciname_future <- left_join(consumption_sciname, df, by = c("eez_iso
 
 # Modify sciname casing so that it can be joined to fishbase
 consumption_sciname <- consumption_sciname %>%
-  mutate(sciname_joinable_to_fishbase = str_to_title(word(sciname, 1)), 
-         sciname_joinable_to_fishbase2 = word(sciname, 2), 
+  mutate(sciname_joinable_to_fishbase = str_to_title(word(sciname_hs_modified, 1)), 
+         sciname_joinable_to_fishbase2 = word(sciname_hs_modified, 2), 
          sciname_joinable_to_fishbase = ifelse(
         is.na(sciname_joinable_to_fishbase2),
         sciname_joinable_to_fishbase,
@@ -332,8 +369,14 @@ consumption_sciname <- consumption_sciname %>%
   select(-sciname_joinable_to_fishbase2) %>%
   relocate(sciname_joinable_to_fishbase, .after = sciname)
 
+
+# ***
+# MAKING SURE ARTIS SCINAMES ALIGN WITH FISHBASE
+
 # # of ARTIS unique ID's (includes higher taxonomic levels that aren't only species) - 2232 total IDs
 length(unique(consumption_sciname$sciname_joinable_to_fishbase))
+
+length(unique(consumption$sciname_hs_modified))
 
 # # of ARTIS species (1780 species - shouldn't be more than Fishbase?)
 sum(str_detect(unique(na.omit(consumption_sciname$sciname)), " "))
@@ -347,6 +390,9 @@ artis_fishbase_locations <- faoareas(species_list = c(unique(consumption_sciname
 # Total number of joined species succesfully from ARTIS
 length(unique(artis_fishbase_locations$Species))
 sum(str_detect(unique(artis_fishbase_locations$Species), " "))
+
+# ***
+
 
 # Get unique taxonomic entries (no repeats)
 unique_taxonomy_entries <- taxa_level_vars(consumption_sciname, ungroup = TRUE)
