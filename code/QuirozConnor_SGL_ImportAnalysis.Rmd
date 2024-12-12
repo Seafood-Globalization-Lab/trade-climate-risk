@@ -564,6 +564,9 @@ consumption_conutries_joined %>%
 consumption_conutries_joined %>%
   filter(presence_or_absence %in% c(0,1)) %>%
   distinct(sciname_joinable_to_fishbase)
+
+# Check to see if fishbase and sealifebase have any overlapping species (they do not!)
+any(artis_sealifebase_locations$Species %in% artis_fishbase_locations$Species)
 ```
 
 # Data Visualization + Analysis
