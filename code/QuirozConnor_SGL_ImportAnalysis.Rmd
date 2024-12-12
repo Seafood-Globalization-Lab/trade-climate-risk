@@ -367,10 +367,6 @@ consumption_sciname %>%
 ```
 
 ```{r add in fishbase data connection}
-# faoareas(server = "fishbase")
-# faoareas(species_list = c(unique(species_names$taxon_name)))
-# species()
-
 # Modify sciname casing so that it can be joined to fishbase
 consumption_sciname <- consumption_sciname %>%
   mutate(sciname_joinable_to_fishbase = str_to_title(word(sciname_hs_modified, 1)), 
@@ -394,7 +390,7 @@ length(unique(consumption$sciname_hs_modified))
 # # of ARTIS species (1780 species - shouldn't be more than Fishbase?)
 sum(str_detect(unique(na.omit(consumption_sciname$sciname)), " "))
 
-# 1320 species with sciname_hs_modified variable (This seems more right) - less than 
+# 1326 species with sciname_hs_modified variable (This seems more right) - less than 
 sum(str_detect(unique(na.omit(consumption_sciname$sciname_hs_modified)), " "))
 
 # Unique entries in Fishbase (i.e., # of ARTIS species successfully joined to fishbase - 1382 species)
@@ -456,6 +452,7 @@ country_list <- list()
 # Set length of list
 length(country_list) <- nrow(artis_fishbase_locations)
 
+# Assign a country into the present countries if a species distribution intersects with a country's EEZ 
 for (i in 1:nrow(artis_fishbase_locations)) {
   for (j in 1:nrow(eez_extents)) {
     lat_check <- (abs(artis_fishbase_locations$SouthernLatitude[i]) <= abs(eez_extents$y_max[j])) &
@@ -464,12 +461,6 @@ for (i in 1:nrow(artis_fishbase_locations)) {
     long_check <- (abs(artis_fishbase_locations$WesternLongitude[i]) <= abs(eez_extents$x_max[j])) &
       (abs(artis_fishbase_locations$EasternLongitude[i]) >= abs(eez_extents$x_min[j]))
     if (lat_check & long_check) {
-      
-      # eez_assignments[i] <- append(eez_assignments, eez_extents$ISO_TER1[j])
-      
-      # eez_assignments[i] <- c(eez_assignments[i], eez_extents$ISO_TER1[j])
-      
-      
       
       country_list[[i]] <- c(country_list[[i]], eez_extents$ISO_TER1[j])
 
@@ -575,7 +566,7 @@ consumption_conutries_joined %>%
   distinct(sciname_joinable_to_fishbase)
 ```
 
-# Data visualization
+# Data Visualization + Analysis
 ```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
 for (i in levels) {
   # Shannon diversity of countries' imports
