@@ -128,6 +128,62 @@ taxa_level_vars <- function(data, ungroup = FALSE) {
   
   
 }
+
+# Another way to get species distributions in certain countries (need to see how many countries are represented in this vs FAO, which doesn't directly report countries, but needs to be joined on eez data).
+taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
+
+  artis_fishbase_locations <- country(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)), server = data)
+  
+  if (obtain_stats == TRUE) {
+    # faoareas() and country() have equal coverage - 1075 species from ARTIS' 1326 species
+    # 229 countries when dealing with country() data, but how many covered countries when dealing with faoareas() data?
+    num_countries <- artis_fishbase_locations %>%
+      filter(Status %in% c("native", "Native", "introduced", "endemic")) %>%
+      mutate(eez_name = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
+      distinct(eez_name) %>%
+      summarize(length = length(eez_name)) %>%
+      pull(length)
+    print(paste0("Number of countries joined to ", data, ": ", as.character(num_countries)))
+    
+    # Data coverage:
+    num_species_artis <- sum(str_detect(
+      unique(consumption_sciname$sciname_joinable_to_fishbase), " "), na.rm = TRUE)
+    num_species_fishbase <- artis_fishbase_locations %>%
+      summarize(unique_species = length(unique(Species))) %>%
+      pull(unique_species)
+    
+    species_coverage_pct <- round((num_species_fishbase / num_species_artis), 2) * 100
+    
+    # 81% % coverage of all ARTIS species in fishbase - also try sealifebase?
+    print(paste0("Number of species in ", sym(data), ": ", num_species_fishbase))
+    print(paste0("Number of species in ARTIS", ": ", num_species_artis))
+    print(paste0("Percent of ARTIS species that ", sym(data), " has: ", as.character(species_coverage_pct),"%"))
+  }
+  else {
+    # Which countries species are found in (using country() distribution data)
+    fishbase_country_presences <- artis_fishbase_locations %>%
+      filter(Status %in% c("native", "Native", "introduced", "endemic")) %>%
+      mutate(eez_name = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
+      group_by(Species) %>%
+      summarize(countries_found = paste0(unique(eez_name), collapse = ",")) %>%
+      rename(sciname_joinable_to_fishbase = "Species") %>%
+      mutate(source = data)
+    
+    consumption_countries_joined <- left_join(consumption_sciname, fishbase_country_presences, by = "sciname_joinable_to_fishbase")
+    # 
+    # Determine whether a species is present or absent in an EEZ
+    consumption_countries_joined <- consumption_countries_joined %>%
+      ungroup() %>%
+      mutate(presence_or_absence = case_when(
+        str_detect(countries_found, eez_iso3c) ~ 1,!str_detect(countries_found, eez_iso3c) ~ 0,
+        TRUE ~ NA
+      ))
+    
+    return(consumption_countries_joined)
+  }
+  
+  
+}
 ```
 
 
@@ -225,6 +281,7 @@ df <- rbind(df, df_postprocessed)
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
 consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
+consumption_all_years <- consumption
 consumption <- consumption %>%
   filter(year == 2019)
 
@@ -344,8 +401,8 @@ con_joined %>%
   arrange(-desc(consumer_iso3c))
 
 # Prints out number of unique values per phylogenetic group
-for (i in 10:17) {
-  print(c(length(unique(consumption_sciname[,i])), names(consumption_sciname)[i]))
+for (i in c(19, 21, 22, 23)) {
+  print(c(length(unique(na.omit(consumption_sciname[[i]]))), names(consumption_sciname)[i]))
 }
 
 # Join consumption dataset to future climate data
@@ -394,7 +451,7 @@ sum(str_detect(unique(na.omit(consumption_sciname$sciname)), " "))
 sum(str_detect(unique(na.omit(consumption_sciname$sciname_hs_modified)), " "))
 
 # Unique entries in Fishbase (i.e., # of ARTIS species successfully joined to fishbase - 1382 species)
-artis_fishbase_locations <- faoareas(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)), server = "sealifebase")
+artis_fishbase_locations <- faoareas(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)), server = "fishbase")
 
 # Total number of joined species succesfully from ARTIS
 length(unique(artis_fishbase_locations$Species))
@@ -442,7 +499,6 @@ print(taxa_unreported_quantity)
 # View joined artis / fishbase database
 View(artis_fishbase_locations)
 
-
 # Identify what eez species distrubutions are in (with faoareas)
 eez_assignments <- data.frame(eez_name = 1:nrow(artis_fishbase_locations))
 
@@ -451,6 +507,8 @@ country_list <- list()
 
 # Set length of list
 length(country_list) <- nrow(artis_fishbase_locations)
+
+# METHOD 1: rfishbase::faoareas()
 
 # Assign a country into the present countries if a species distribution intersects with a country's EEZ 
 for (i in 1:nrow(artis_fishbase_locations)) {
@@ -490,83 +548,72 @@ length(unique(unlist(country_list)))
 # Combine fishbase fishbase location data with their respective countries they're found in
 artis_fishbase_locations <- cbind(artis_fishbase_locations, eez_assignments)
 
-
-# 782 species 
+# Number of species covered in fishbase via faoareas() - 782 species
 length(unique(artis_fishbase_locations[!is.na(artis_fishbase_locations$eez_name),]$Species))
 
 
 
 
+# METHOD 2: rfishbase::conutry()
 
-# Another way to get species distributions in certain countries (need to see how many countries are represented in this vs FAO, which doesn't directly report countries, but needs to be joined on eez data).
-artis_fishbase_locations <- country(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)))
+# Obtain stats on fishbase/sealifebase data
+taxa_presence_or_absence(data = "fishbase", obtain_stats = TRUE)
+taxa_presence_or_absence(data = "sealifebase", obtain_stats = TRUE)
 
-# faoareas() and country() have equal coverage - 1075 species from ARTIS' 1326 species
-# 229 countries when dealing with country() data, but how many covered countries when dealing with faoareas() data?
-artis_fishbase_locations %>%
-  filter(Status %in% c("native", "Native", "introduced", "endemic")) %>%
-  mutate(eez_name = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
-  distinct(eez_name)
+# Create presence/absence data
+fishbase_presences <- taxa_presence_or_absence(data = "fishbase")
+sealifebase_presences <- taxa_presence_or_absence(data = "sealifebase")
 
-# Data coverage: 
-num_species_artis <- sum(str_detect(unique(consumption_sciname$sciname_joinable_to_fishbase), " "), na.rm = TRUE)
-num_species_fishbase <- artis_fishbase_locations %>%
-  summarize(unique_species = length(unique(Species))) %>%
-  pull(unique_species)
+# Number of rows in ARTIS data (fishbase + sealifebase presence data)
+fishbase_presences %>%
+  count(presence_or_absence) %>%
+  summarize(summ = sum(n)) %>%
+  pull(summ)
 
-# 81% % coverage of all ARTIS species in fishbase - also try sealifebase? 
-print(num_species_fishbase / num_species_artis)
+sealifebase_presences %>%
+  count(presence_or_absence) %>%
+  summarize(summ = sum(n)) %>%
+  pull(summ)
 
-# number of species in fishbase
-length(unique(artis_fishbase_locations$Species))
 
-# Which countries species are found in (using country() distribution data)
-fishbase_country_presences <- artis_fishbase_locations %>%
-  filter(Status %in% c("native", "Native", "introduced", "endemic")) %>%
-  mutate(eez_name = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
-  group_by(Species) %>%
-  summarize(countries_found = paste0(unique(eez_name), collapse = ","))
-
-# Now test for Sealifebase
-  artis_sealifebase_locations <-country(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)), server = "sealifebase")
-  
-
-# Number of species found in Sealifebase
-num_species_sealifebase <- artis_sealifebase_locations %>%
-  summarize(unique_species = length(unique(Species))) %>%
-  pull(unique_species)
-
-# Total coverage: 96.68%! (# species in fishbase + sealifebase / total species found in ARTIS) --> 1075 + 207 = 
-print((num_species_fishbase + num_species_sealifebase)  / num_species_artis)
-
-# Why is coverage not 100% Ask Jessica - still really good coverage of species distribution data!
-
-# Test if an ARTIS species is **present** or not (test against distribution / country list combined data)
-fishbase_country_presences <- fishbase_country_presences %>%
-  rename(sciname_joinable_to_fishbase = Species)
-  
-consumption_conutries_joined <- left_join(consumption_sciname, fishbase_country_presences, by = "sciname_joinable_to_fishbase")
-
-# Determine whether a species is present or absent in an EEZ
-consumption_conutries_joined <- consumption_conutries_joined %>%
-ungroup() %>%
-  mutate(
-    presence_or_absence = case_when(str_detect(countries_found, eez_iso3c) ~ 1,
-    !str_detect(countries_found, eez_iso3c) ~ 0,
-    TRUE ~ NA)
-  )
-
-# Number of presences and absences in the ARTIS data
-consumption_conutries_joined %>%
-  count(presence_or_absence)
-
-# Number of species that joined to fishbase, and back to ARTIS (needed to do double join to combine ARTIS species data with 0/1 presence).
-consumption_conutries_joined %>%
-  filter(presence_or_absence %in% c(0,1)) %>%
-  distinct(sciname_joinable_to_fishbase)
+fishbase_presences %>%
+  filter(presence_or_absence %in% c(0,1))
 
 # Check to see if fishbase and sealifebase have any overlapping species (they do not!)
 any(artis_sealifebase_locations$Species %in% artis_fishbase_locations$Species)
+
+# Filter to only have sealifebase data (separate out sealifebase base using source variable)
+only_sealifebase <- sealifebase_presences %>%
+  filter(source == "sealifebase")
+
+# Get indexes where sealifebase found presences or absences
+sealifebase_presence_absences_indexes <- which(sealifebase_presences$presence_or_absence %in% c(0,1))
+
+# Select fishbase + unlinked NA data (excludes sealifebase)
+fishbase_minus_sealifebase <- fishbase_presences[-sealifebase_presence_absences_indexes,]
+
+# Merce fishbase / sealifebase presence data - this will be the data that we use to interpolate higher taxonomic resolutions!
+merged_presence_absence_data <- rbind(fishbase_minus_sealifebase, only_sealifebase)
+
+# Double check that all NA values occuring in species are because they are not located in either fishbase or sealifebase 44 rows is correct!
+merged_presence_absence_data %>%
+  filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
+  distinct(sciname_joinable_to_fishbase) %>%
+  summarize(length = n()) %>%
+  pull(length)
+
+# Number of excluded rows for *species* that weren't matched 13809 rows
+merged_presence_absence_data %>%
+  filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
+  summarize(length = n()) %>%
+  pull(length)
+
+# See how many 0/1/NA there are in presences
+merged_presence_absence_data %>%
+  count(presence_or_absence)
+
+# Write merged presence/absence data to .parquet file
+write_parquet("../data/merged_presence_absence_data.parquet")
 ```
 
 # Data Visualization + Analysis
