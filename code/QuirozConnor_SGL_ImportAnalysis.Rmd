@@ -5,6 +5,7 @@ date: "2024-11-15"
 output: html_document
 ---
 
+# Setup / Load in Packages
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 # General data cleaning + visualization + analysis packages
@@ -13,6 +14,8 @@ library(ggformula)
 library(countrycode)
 library(data.table)
 library(arrow)
+
+# For creating map visualizations + spatial analysis
 library(sf)
 
 # Load in packages needed for ARTIS
@@ -129,6 +132,94 @@ taxa_level_vars <- function(data, ungroup = FALSE) {
   
 }
 
+# METHOD 1: FAOAREAS
+taxa_presence_or_absence_faoareas <- function(data = "fishbase", obtain_stats = FALSE) {
+  artis_fishbase_locations <- faoareas(species_list = c(unique(consumption_sciname$sciname_joinable_to_fishbase)), server = data)
+  # Identify what eez species distrubutions are in (with faoareas)
+  eez_assignments <- data.frame(eez_name = 1:nrow(artis_fishbase_locations))
+  
+  # Initialize list
+  country_list <- list()
+  
+  # Set length of list
+  length(country_list) <- nrow(artis_fishbase_locations)
+  
+  # METHOD 1: rfishbase::faoareas()
+  
+  # Assign a country into the present countries if a species distribution intersects with a country's EEZ
+  for (i in 1:nrow(artis_fishbase_locations)) {
+    for (j in 1:nrow(eez_extents)) {
+      lat_check <- (abs(artis_fishbase_locations$SouthernLatitude[i]) <= abs(eez_extents$y_max[j])) &
+        (abs(artis_fishbase_locations$NorthernLatitude[i]) >= abs(eez_extents$y_min[j]))
+      
+      long_check <- (abs(artis_fishbase_locations$WesternLongitude[i]) <= abs(eez_extents$x_max[j])) &
+        (abs(artis_fishbase_locations$EasternLongitude[i]) >= abs(eez_extents$x_min[j]))
+      if (lat_check & long_check) {
+        country_list[[i]] <- c(country_list[[i]], eez_extents$ISO_TER1[j])
+        
+      }
+      if (j == nrow(eez_extents)) {
+        if (is.null(country_list[[i]])) {
+          country_list[[i]] <- NA
+          eez_assignments$eez_name[i] = country_list[[i]]
+        }
+        else {
+          eez_assignments$eez_name[i] = paste0(c(country_list[[i]]), collapse = " ")
+        }
+      }
+    }
+  }
+  
+  # Number of unique country combinations
+  length(unique(eez_assignments$eez_name))
+  
+  # Number of N/S/E/W combinations (make sure it roughly matches with number of unique combinations.)
+  artis_fishbase_locations %>%
+    distinct(
+      NorthernLatitude,
+      SouthernLatitude,
+      EasternLongitude,
+      EasternLongitude,
+      WesternLongitude
+    )
+  
+  # Country coverage using FAO distribution data: 154 countries (less than when using country() data.
+  length(unique(unlist(country_list)))
+  
+  # Combine fishbase fishbase location data with their respective countries they're found in
+  artis_fishbase_locations_faoareas <- cbind(artis_fishbase_locations, eez_assignments)
+  
+  # Number of species covered in fishbase via faoareas() - 782 species
+  length(unique(artis_fishbase_locations_faoareas[!is.na(artis_fishbase_locations_faoareas$eez_name), ]$Species))
+  
+  artis_fishbase_locations_faoareas <- artis_fishbase_locations_faoareas %>%
+    select(eez_name, Species) %>%
+    rename(sciname_joinable_to_fishbase = "Species",
+           countries_found = "eez_name")
+  
+  artis_fishbase_locations_faoareas <- artis_fishbase_locations_faoareas %>%
+    distinct(sciname_joinable_to_fishbase, .keep_all = TRUE) %>%
+    mutate(source = data)
+  
+  
+  consumption_countries_joined_faoareas <- left_join(consumption_sciname,
+                                                     artis_fishbase_locations_faoareas,
+                                                     by = "sciname_joinable_to_fishbase")
+  #
+  # Determine whether a species is present or absent in an EEZ
+  consumption_countries_joined_faoareas <- consumption_countries_joined_faoareas %>%
+    ungroup() %>%
+    mutate(presence_or_absence = case_when(
+      str_detect(countries_found, eez_iso3c) ~ 1,
+      !str_detect(countries_found, eez_iso3c) ~ 0,
+      TRUE ~ NA
+    ))
+  
+  return(consumption_countries_joined_faoareas)
+}
+
+# METHOD 2: rfishbase::country()
+
 # Another way to get species distributions in certain countries (need to see how many countries are represented in this vs FAO, which doesn't directly report countries, but needs to be joined on eez data).
 taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
 
@@ -184,6 +275,8 @@ taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
   
   
 }
+# Save dataframe
+country()
 ```
 
 
@@ -499,59 +592,25 @@ print(taxa_unreported_quantity)
 # View joined artis / fishbase database
 View(artis_fishbase_locations)
 
-# Identify what eez species distrubutions are in (with faoareas)
-eez_assignments <- data.frame(eez_name = 1:nrow(artis_fishbase_locations))
-
-# Initialize list
-country_list <- list()
-
-# Set length of list
-length(country_list) <- nrow(artis_fishbase_locations)
-
 # METHOD 1: rfishbase::faoareas()
+fishbase_presences_faoareas <- taxa_presence_or_absence_faoareas(data = "fishbase")
+sealifebase_presences_faoareas <- taxa_presence_or_absence_faoareas(data = "sealifebase")
 
-# Assign a country into the present countries if a species distribution intersects with a country's EEZ 
-for (i in 1:nrow(artis_fishbase_locations)) {
-  for (j in 1:nrow(eez_extents)) {
-    lat_check <- (abs(artis_fishbase_locations$SouthernLatitude[i]) <= abs(eez_extents$y_max[j])) &
-      (abs(artis_fishbase_locations$NorthernLatitude[i]) >= abs(eez_extents$y_min[j]))
-    
-    long_check <- (abs(artis_fishbase_locations$WesternLongitude[i]) <= abs(eez_extents$x_max[j])) &
-      (abs(artis_fishbase_locations$EasternLongitude[i]) >= abs(eez_extents$x_min[j]))
-    if (lat_check & long_check) {
-      
-      country_list[[i]] <- c(country_list[[i]], eez_extents$ISO_TER1[j])
+# Filter to only have sealifebase data (separate out sealifebase base using source variable)
+only_sealifebase <- sealifebase_presences_faoareas %>%
+  filter(source == "sealifebase")
 
-    }
-    if (j == nrow(eez_extents)) {
-      if (is.null(country_list[[i]])) {
-        country_list[[i]] <- NA
-        eez_assignments$eez_name[i] = country_list[[i]]
-      }
-      else {
-        eez_assignments$eez_name[i] = paste0(c(country_list[[i]]), collapse = " ")
-      }
-    }
-  }
-}
+# Get indexes where sealifebase found presences or absences
+sealifebase_presence_absences_indexes <- which(sealifebase_presences_faoareas$presence_or_absence %in% c(0,1))
 
-# Number of unique country combinations
-length(unique(eez_assignments$eez_name))
+# Select fishbase + unlinked NA data (excludes sealifebase)
+fishbase_minus_sealifebase <- fishbase_presences_faoareas[-sealifebase_presence_absences_indexes,]
 
-# Number of N/S/E/W combinations (make sure it roughly matches with number of unique combinations.)
-artis_fishbase_locations %>%
-  distinct(NorthernLatitude, SouthernLatitude, EasternLongitude, EasternLongitude, WesternLongitude)
+# Merce fishbase / sealifebase presence data - this will be the data that we use to interpolate higher taxonomic resolutions!
+merged_presence_absence_data_faoareas <- rbind(fishbase_minus_sealifebase, only_sealifebase)
 
-# Country coverage using FAO distribution data: 154 countries (less than when using country() data.
-length(unique(unlist(country_list)))
-
-# Combine fishbase fishbase location data with their respective countries they're found in
-artis_fishbase_locations <- cbind(artis_fishbase_locations, eez_assignments)
-
-# Number of species covered in fishbase via faoareas() - 782 species
-length(unique(artis_fishbase_locations[!is.na(artis_fishbase_locations$eez_name),]$Species))
-
-
+merged_presence_absence_data_faoareas %>%
+  count(presence_or_absence)
 
 
 # METHOD 2: rfishbase::conutry()
@@ -561,62 +620,65 @@ taxa_presence_or_absence(data = "fishbase", obtain_stats = TRUE)
 taxa_presence_or_absence(data = "sealifebase", obtain_stats = TRUE)
 
 # Create presence/absence data
-fishbase_presences <- taxa_presence_or_absence(data = "fishbase")
-sealifebase_presences <- taxa_presence_or_absence(data = "sealifebase")
+fishbase_presences_country <- taxa_presence_or_absence(data = "fishbase")
+sealifebase_presences_country <- taxa_presence_or_absence(data = "sealifebase")
 
 # Number of rows in ARTIS data (fishbase + sealifebase presence data)
-fishbase_presences %>%
+fishbase_presences_country %>%
   count(presence_or_absence) %>%
-  summarize(summ = sum(n)) %>%
-  pull(summ)
+  summarize(sum = sum(n)) %>%
+  pull(sum)
 
-sealifebase_presences %>%
+sealifebase_presences_country %>%
   count(presence_or_absence) %>%
-  summarize(summ = sum(n)) %>%
-  pull(summ)
+  summarize(sum = sum(n)) %>%
+  pull(sum)
 
 
-fishbase_presences %>%
+fishbase_presences_country %>%
   filter(presence_or_absence %in% c(0,1))
 
 # Check to see if fishbase and sealifebase have any overlapping species (they do not!)
-any(artis_sealifebase_locations$Species %in% artis_fishbase_locations$Species)
+any(sealifebase_presences_country$Species %in% artis_fishbase_locations$Species)
 
 # Filter to only have sealifebase data (separate out sealifebase base using source variable)
-only_sealifebase <- sealifebase_presences %>%
+only_sealifebase <- sealifebase_presences_country %>%
   filter(source == "sealifebase")
 
 # Get indexes where sealifebase found presences or absences
-sealifebase_presence_absences_indexes <- which(sealifebase_presences$presence_or_absence %in% c(0,1))
+sealifebase_presence_absences_indexes <- which(sealifebase_presences_country$presence_or_absence %in% c(0,1))
 
 # Select fishbase + unlinked NA data (excludes sealifebase)
-fishbase_minus_sealifebase <- fishbase_presences[-sealifebase_presence_absences_indexes,]
+fishbase_minus_sealifebase <- fishbase_presences_country[-sealifebase_presence_absences_indexes,]
 
 # Merce fishbase / sealifebase presence data - this will be the data that we use to interpolate higher taxonomic resolutions!
-merged_presence_absence_data <- rbind(fishbase_minus_sealifebase, only_sealifebase)
+# start using tidyverse functions (bind_rows)
+merged_presence_absence_data_country <- rbind(fishbase_minus_sealifebase, only_sealifebase)
 
 # Double check that all NA values occuring in species are because they are not located in either fishbase or sealifebase 44 rows is correct!
-merged_presence_absence_data %>%
+merged_presence_absence_data_country %>%
   filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
   distinct(sciname_joinable_to_fishbase) %>%
   summarize(length = n()) %>%
   pull(length)
 
 # Number of excluded rows for *species* that weren't matched 13809 rows
-merged_presence_absence_data %>%
+merged_presence_absence_data_country %>%
   filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
   summarize(length = n()) %>%
   pull(length)
 
 # See how many 0/1/NA there are in presences
-merged_presence_absence_data %>%
+merged_presence_absence_data_country %>%
   count(presence_or_absence)
 
 # Write merged presence/absence data to .parquet file
 write_parquet("../data/merged_presence_absence_data.parquet")
+View(fishbase_presences_country)
 ```
 
 # Data Visualization + Analysis
+
 ```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
 for (i in levels) {
   # Shannon diversity of countries' imports
@@ -733,7 +795,6 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
 ```
 
 
-# Data visualization + Analysis
 
 ```{r data visualization + analysis}
 # Top 10 total seafood weights by country
@@ -829,7 +890,7 @@ countrycode(con_joined$consumer_iso3c, "iso3c", "region")
 
 > Takeaways: Little correlation between hdi and total weight + shannon diversity, but stronger, positive correlation between weight and shannon diversity (as seen in correlatnion + scatter plots)
 
-# Save Images
+## Save Images
 
 ```{r Save images}
 # Save images
