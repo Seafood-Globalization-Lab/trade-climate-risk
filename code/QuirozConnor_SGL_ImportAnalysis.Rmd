@@ -276,7 +276,6 @@ taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
   
 }
 # Save dataframe
-country()
 ```
 
 
@@ -653,28 +652,44 @@ fishbase_minus_sealifebase <- fishbase_presences_country[-sealifebase_presence_a
 
 # Merce fishbase / sealifebase presence data - this will be the data that we use to interpolate higher taxonomic resolutions!
 # start using tidyverse functions (bind_rows)
-merged_presence_absence_data_country <- rbind(fishbase_minus_sealifebase, only_sealifebase)
+merged_presence_absence_data_country <- bind_rows(fishbase_minus_sealifebase, only_sealifebase)
 
-# Double check that all NA values occuring in species are because they are not located in either fishbase or sealifebase 44 rows is correct!
-merged_presence_absence_data_country %>%
-  filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
-  distinct(sciname_joinable_to_fishbase) %>%
-  summarize(length = n()) %>%
-  pull(length)
+merged_presence_absence_data_country <- merged_presence_absence_data_country %>%
+  mutate(species = case_when(str_detect(sciname, " ") ~ sciname, TRUE ~ NA)) %>%
+  relocate(species, .before = genus)
 
-# Number of excluded rows for *species* that weren't matched 13809 rows
-merged_presence_absence_data_country %>%
-  filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
-  summarize(length = n()) %>%
-  pull(length)
+# Determine if lower resolution taxa are in an eez (e.g., if a species for a given country is found there that is also a lower resolution taxa like actinoptergyii, then all actinoptergyii or higher will be found in that country)
+presence_absence_data_country_all_taxa <- data.frame()
+for (i in unique(merged_presence_absence_data_country$eez_iso3c)) {
+  # Group data by eez country
+  sliced_data <- merged_presence_absence_data_country %>%
+  filter(eez_iso3c == sym(i))
 
-# See how many 0/1/NA there are in presences
-merged_presence_absence_data_country %>%
-  count(presence_or_absence)
+  # Create updated presence on sliced data
+  sliced_data_for_merging <- sliced_data %>%
+  mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, family, order, class) %>%
+  unlist() %>%
+  unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1, TRUE ~ 0))
 
-# Write merged presence/absence data to .parquet file
-write_parquet("../data/merged_presence_absence_data.parquet")
-View(fishbase_presences_country)
+  # Combine rows of each country
+  presence_absence_data_country_all_taxa <- bind_rows(presence_absence_data_country_all_taxa, sliced_data_for_merging)
+
+}
+
+# Count Number of presences/absences in filled in presence data
+presence_absence_data_country_all_taxa <- presence_absence_data_country_all_taxa %>%
+  relocate(presence_or_absence_all_taxa, .after = presence_or_absence)
+
+# Count number of total presences / absences across ALL taxa levels
+presence_absence_data_country_all_taxa %>%
+  count(presence_or_absence_all_taxa)
+
+# Code my brother put in lol
+michael <- 'the best brother' 
+ 
+sean <- 'alright I guess'
+
+print(c('michael is', michael, 'and sean is',sean ))
 ```
 
 # Data Visualization + Analysis
