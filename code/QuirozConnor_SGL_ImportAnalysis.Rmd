@@ -667,7 +667,7 @@ for (i in unique(merged_presence_absence_data_country$eez_iso3c)) {
 
   # Create updated presence on sliced data
   sliced_data_for_merging <- sliced_data %>%
-  mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, family, order, class) %>%
+  mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, subfamily, family, order, class, superclass, phylum, kingdom) %>%
   unlist() %>%
   unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1, TRUE ~ 0))
 
@@ -684,12 +684,31 @@ presence_absence_data_country_all_taxa <- presence_absence_data_country_all_taxa
 presence_absence_data_country_all_taxa %>%
   count(presence_or_absence_all_taxa)
 
+# Exploring proportion of absent data
+presence_absence_data_country_all_taxa %>%
+  group_by(eez_iso3c) %>%
+  distinct(sciname, .keep_all = TRUE) %>%
+  select(sciname, presence_or_absence_all_taxa) %>%
+  count(presence_or_absence_all_taxa) %>%
+  mutate(presence_or_absence_all_taxa = as.character(presence_or_absence_all_taxa)) %>%
+  pivot_wider(values_from = n, names_from = presence_or_absence_all_taxa, names_glue = "quantity_{presence_or_absence_all_taxa}") %>%
+  mutate(prop_missing =  quantity_0 / (quantity_0 + quantity_1)) %>%
+  filter(is.na(prop_missing)) %>%
+  rename(number_absences = "quantity_0", number_presences = "quantity_1")
+
 # Code my brother put in lol
 michael <- 'the best brother' 
  
 sean <- 'alright I guess'
 
 print(c('michael is', michael, 'and sean is',sean ))
+
+# Get species codes
+fb_tbl("species", "fishbase")
+
+# Determine different commercial usages (need to only include commercial fishes for our analysis)
+country() %>%
+  distinct(Importance)
 ```
 
 # Data Visualization + Analysis
@@ -871,6 +890,23 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
   scale_fill_manual(values = artis_palette(length(unique(con_joined$region)))) +
   theme_light() +
   labs(x = "Taxonomic level", y = "Proportion of production\nreported to at least target\ntaxonomic level", fill = "Region"))
+
+# Proportion of reports that are seen as countrywide absences according to fishbase/sealifebase
+(prop_absences <- presence_absence_data_country_all_taxa %>%
+  group_by(eez_iso3c) %>%
+  distinct(sciname, .keep_all = TRUE) %>%
+  select(sciname, presence_or_absence_all_taxa) %>%
+  count(presence_or_absence_all_taxa) %>%
+  mutate(presence_or_absence_all_taxa = as.character(presence_or_absence_all_taxa)) %>%
+  pivot_wider(values_from = n, names_from = presence_or_absence_all_taxa, names_glue = "quantity_{presence_or_absence_all_taxa}") %>%
+  mutate(prop_missing =  quantity_0 / (quantity_0 + quantity_1)) %>%
+  ggplot(aes(x = prop_missing)) +
+  geom_boxplot(fill = artis_palette(1)) +
+  labs(x = "Prop of countries' stock reported as absent\n(Fishbase/Sealifebase") +
+  theme_light() +
+      theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()))
   
 # ANOVA testing prop at least species vs region
 leveneTest(prop_at_least_species ~ region, data = con_joined)
@@ -918,4 +954,6 @@ ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, devi
 ggsave("../images/ssp_projections.jpg", plot = ssp_projections, device = "jpeg", height = 3, width = 6, units = "in")
 
 ggsave("../images/prop_versus_tax_versus_country.jpg", plot = prop_versus_tax_versus_country, device = "jpeg", height = 4, width = 9, units = "in")
+
+ggsave("../images/prop_absences.jpg", plot = prop_absences, device = "jpeg", height = 3, width = 5, units = "in")
 ```
