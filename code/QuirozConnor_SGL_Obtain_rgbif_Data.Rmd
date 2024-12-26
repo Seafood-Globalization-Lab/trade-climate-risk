@@ -19,7 +19,7 @@ library(arrow)
 
 # Data Cleaning
 
-**IMPORTANT:** This script is to obtain taxa information within the commercial fishing species data (i.e., higher taxa level names for family, order, and class) that was not available in the sciname dataset. Must be used on the commercial_products object created in "QuirozConnor_SGL_ImportAnalysis" at ~ line 811.
+**IMPORTANT / SCRIPT PURPOSE:** This script is to obtain taxa information within the commercial fishing species data (i.e., higher taxa level names for family, order, and class) that was not available in the sciname dataset. Must be used on the commercial_products object created in "QuirozConnor_SGL_ImportAnalysis" at ~ line 811.
 
 ```{r}
 # Get commercial scinames
