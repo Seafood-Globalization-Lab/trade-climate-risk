@@ -18,6 +18,9 @@ library(arrow)
 # For creating map visualizations + spatial analysis
 library(sf)
 
+# For identifying higher taxa levels
+library("taxa")
+
 # Load in packages needed for ARTIS
 library(devtools)
 library(tidytext)
@@ -275,7 +278,7 @@ taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
       filter(Status %in% c("native", "Native", "introduced", "endemic")) %>%
       mutate(eez_name = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
       group_by(Species) %>%
-      summarize(countries_found = paste0(unique(eez_name), collapse = " ", Importance = Importance)) %>%
+      summarize(countries_found = paste0(unique(eez_name), collapse = " ")) %>%
       rename(sciname_joinable_to_fishbase = "Species")
     
     consumption_countries_joined <- full_join(consumption_sciname, fishbase_country_presences, by = "sciname_joinable_to_fishbase")
@@ -542,7 +545,7 @@ consumption_sciname %>%
   summarize(total_order = length(unique(order)))
 ```
 
-```{r add in fishbase data connection}
+```{r add in fishbase / sealifebase data connections}
 # Read in fishbase/sealifebase data
 fb_presences_country <- read_parquet("../data/fb_slb_data/fb_presences_country.parquet")
 slb_presences_country <- read_parquet("../data/fb_slb_data/slb_presences_country.parquet")
@@ -623,9 +626,6 @@ taxa_unreported_quantity <- taxa_unreported_quantity %>%
 # Reports proportion and quantities that are not reported to a given taxonomic level.
 print(taxa_unreported_props)
 print(taxa_unreported_quantity)
-
-# View joined artis / fishbase database
-View(artis_fishbase_locations)
 
 # METHOD 1: rfishbase::faoareas() - takes awhile to run thus commented
 # fishbase_presences_faoareas <- taxa_presence_or_absence_faoareas(data = "fishbase")
@@ -742,55 +742,89 @@ sean <- 'alright I guess'
 
 print(c('michael is', michael, 'and sean is',sean ))
 
-# Determine different commercial usages (need to only include commercial fishes for our analysis)
-fb_presences_country %>%
-  distinct(Importance)
-
-fishbase_presences_country %>%
-  filter(str_detect(sciname_joinable_to_fishbase, " ")) %>%
-  count(joined)
-
-
-# Need to figure our why data isnt matching up, particularly why including 
+# Get species that aren't apart of artis, but are only included in fishbase/sealife base (extra species locations we need to )
 pa_excluding_artis <- merged_presence_absence_data_country %>%
-  filter(str_detect(sciname_joinable_to_fishbase, " ") & (joined == "only in fishbase" | joined == "only in sealifebase"))
+  filter(str_detect(sciname_joinable_to_fishbase, " ") & !(joined %in% c("only in artis", "both")))
 
-# Sum: 93491
+# See which species aren't matched
+# 44 species that aren't mathed to either fishbase or sealifebase
+pa_only_artis %>%
+  filter(str_detect(sciname_joinable_to_fishbase, " ") & is.na(presence_or_absence)) %>%
+  distinct(sciname_joinable_to_fishbase)
+
+# Sum: 93447 - remove species from ARTIS that aren't in fishbase/sealifebase
 sum(pa_excluding_artis %>%
   distinct(sciname_joinable_to_fishbase) %>%
   summarize(n = n()) %>%
   pull(n),
 
-presence_absence_data_country_all_taxa %>%
-  filter(str_detect(sciname_joinable_to_fishbase, " ")) %>%
+pa_only_artis %>%
+  filter(str_detect(sciname_joinable_to_fishbase, " ") & !is.na(presence_or_absence)) %>%
   distinct(sciname_joinable_to_fishbase) %>%
+  drop_na() %>%
   summarize(n = n()) %>%
   pull(n))
 
-# Sum: 93535
+# Sum: 93447
 sum(fb_presences_country %>%
-      filter(!is.na(country)) %>%
+      filter(Status %in% c("native", "Native", "introduced", "endemic") & !is.na(country)) %>%
   distinct(Species) %>%
+    drop_na() %>%
   summarize(n = n()) %>%
   pull(n),
 
 slb_presences_country %>%
-  filter(!is.na(country)) %>%
+  filter(Status %in% c("native", "Native", "introduced", "endemic") & !is.na(country)) %>%
   distinct(Species) %>%
+  drop_na() %>%
   summarize(n = n()) %>%
   pull(n))
 
-pa_excluding_artis %>%
-  separate_rows(countries_found, sep = " ")
+# Determine different commercial usages (need to only include commercial fishes for our analysis)
+fb_presences_country %>%
+  distinct(Importance)
 
-pa_excluding_artis %>%
-  left_join(bind_rows(fb_presences_country, slb_presences_country) %>% rename(sciname_joinable_to_fishbase = "Species"), by = "sciname_joinable_to_fishbase")
-country()
+# Get only non-artis species that are of commercial interest
+fb_slb_commercial_interests <- bind_rows(fb_presences_country %>%
+  filter((Status %in% c("native", "Native", "introduced", "endemic") & !is.na(country)) & (Importance %in% c("minor commercial", "highly commercial", "commercial", "subsistence fisheries", "of potential interest"))),
+slb_presences_country %>%
+  filter((Status %in% c("native", "Native", "introduced", "endemic") & !is.na(country)) & (Importance %in% c("minor commercial", "highly commercial", "commercial", "subsistence fisheries", "of potential interest"))))
+
+# Step 1: Expand found countries for excluded ARTIS species into long format (current state is that countries are a string, where there should only be one country found per column)
+
+# Step 2: Filter out countries that aren't in ARTIS
+pa_excluding_artis <- pa_excluding_artis %>%
+  separate_rows(countries_found, sep = " ") %>%
+  filter(countries_found %in% unique(pa_only_artis$eez_iso3c))
+  
+# Step 3: Convert fb/slb commercial marine country names to iso3c codes
+fb_slb_commercial_interests <- fb_slb_commercial_interests %>%
+  select(country, Importance, Species, TrueSpecies, Genus) %>%
+    mutate(country = countrycode(country, origin = 'country.name', destination = 'iso3c'))
+
+# Step 4: Join full matched species only with fb/slb species of commercial interest
+commercial_products <- inner_join(pa_excluding_artis, fb_slb_commercial_interests, by = c("sciname_joinable_to_fishbase" = "Species", "countries_found" = "country")) %>%
+  mutate(presence_or_absence = 1) %>%
+  select(-c(genus, subfamily, family, order, class, superclass, phylum, kingdom)) %>%
+  mutate(sciname = str_to_lower(sciname_joinable_to_fishbase))
 
 
+# New problem: Only the genus and species names exist, but not family, order, class, and kingdom. We need to add these in
+# New script to refer to to obtain rgbif taxa data - refer to "accepted" column to filter for target species that we will be getting higher taxa names for.
 
+# rgbif function
+name_lookup("Abramis brama")
 
-  filter(SpecCode == 400)
+# Filter to get top ranked species will look something like this: 
+commercial_products %>%
+  mutate(genus = sapply(sciname_joinable_to_fishbase, function(x) {
+    name_lookup(x)[[2]] %>%
+      count(genus) %>%
+      arrange(genus) %>%
+      drop_na() %>%
+      pull(genus) %>%
+      .[1]
+  }))
 ```
 
 

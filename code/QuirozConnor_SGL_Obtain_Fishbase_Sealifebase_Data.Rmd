@@ -20,6 +20,7 @@ library(rfishbase)
 # Writing to .parquet file (faster than .csv)
 library(arrow)
 ```
+**IMPORTANT / SCRIPT PURPOSE:** The purpose of this script is to obtain fishbase and sealifebase data from both the country() and faoareas() functons, containing their species names. The original country() and faoareas() only contains the species codes, and thus must be joined to the species codes to obtain species names, which is necessary for interfacing it with the ARTIS data.
 
 # Obtain fishbase / sealifebase data
 

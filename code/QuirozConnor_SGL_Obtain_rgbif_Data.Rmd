@@ -1,0 +1,44 @@
+---
+title: "Obtain rgbif Taxa data"
+output: html_document
+date: "2024-12-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Data cleaning package
+library(tidyverse)
+
+# Taxonomic library for obtaining taxa names
+install.packages("rgbif")
+library(rgbif)
+
+# Writing to .parquet file (faster than .csv)
+library(arrow)
+```
+
+# Data Cleaning
+
+**IMPORTANT:** This script is to obtain taxa information within the commercial fishing species data (i.e., higher taxa level names for family, order, and class) that was not available in the sciname dataset. Must be used on the commercial_products object created in "QuirozConnor_SGL_ImportAnalysis" at ~ line 811.
+
+```{r}
+# Get commercial scinames
+scientific_names <- commercial_products %>%
+  distinct(sciname_joinable_to_fishbase) %>%
+  pull(sciname_joinable_to_fishbase)
+
+# Loop over the species and get genus, then save results
+commercial_higher_taxa_names <- data.frame()
+for (i in 1:length(scientific_names)) {
+  iteration_data <- name_lookup(scientific_names[i])[[2]]
+  commercial_higher_taxa_names <- bind_rows(commercial_higher_taxa_names, iteration_data)
+}
+
+# Create new directory for rgbif data
+dir.create("../data/rgbif_data")
+
+# Save the data frame to an RDS file (efficient for later loading)
+write_parquet(commercial_higher_taxa_names, "../data/rgbif_data/commercial_higher_taxa_names.parquet")
+read_parquet("../data/rgbif_data/commercial_higher_taxa_names.parquet")
+```
+
