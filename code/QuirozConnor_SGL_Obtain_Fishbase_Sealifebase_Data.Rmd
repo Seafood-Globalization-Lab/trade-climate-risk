@@ -24,44 +24,46 @@ library(arrow)
 
 # Obtain fishbase / sealifebase data
 
-```{r  create }
-# Obtain FB / SLB country() data
-fb_presences_country <- country(server = "fishbase")
-slb_presences_country <- country(server = "sealifebase")
-
-fb_species_codes <- fb_tbl("species", server = "fishbase")
-slb_species_codes <- fb_tbl("species", server = "sealifebase")
-
-# Add in genus / species sciname combination so faoareas() can read it
-fb_species_codes <- fb_species_codes %>%
-  mutate(TrueSpecies = Species, Species = paste0(Genus," ",Species)) %>%
-  relocate(TrueSpecies, .before = Species)
-
-slb_species_codes <- slb_species_codes %>%
-  mutate(TrueSpecies = Species, Species = paste0(Genus," ",Species)) %>%
-  relocate(TrueSpecies, .before = Species)
-
-# Join FB / SLB country() to species codes
-fb_presences_country <- fb_presences_country %>%
-  left_join(fb_species_codes[,c("SpecCode","Species", "TrueSpecies", "Genus")], by = "SpecCode")
-
-slb_presences_country <- slb_presences_country %>%
-  left_join(slb_species_codes[,c("SpecCode","Species", "TrueSpecies", "Genus")], by = "SpecCode")
-
-# Obtain FB / SLB faoareas() data
-fb_presences_faoareas <- faoareas(species_list = fb_species_codes$Species, server = "fishbase")
-slb_presences_faoareas <- faoareas(species_list = fb_species_codes$Species, server = "sealifebase")
-
-# Create new directory for FB/SLB data
-dir.create("../data/fb_slb_data")
-
-# Write files to .parquet
-write_parquet(fb_presences_country, "../data/fb_slb_data/fb_presences_country.parquet")
-write_parquet(slb_presences_country, "../data/fb_slb_data/slb_presences_country.parquet")
-write_parquet(fb_presences_faoareas, "../data/fb_slb_data/fb_presences_faoareas.parquet")
-write_parquet(slb_presences_faoareas, "../data/fb_slb_data/slb_presences_faoareas.parquet")
-write_parquet(slb_species_codes, "../data/fb_slb_data/fb_species_codes")
-write_parquet(slb_species_codes, "../data/fb_slb_data/slb_species_codes.parquet")
+```{r  create fb/slb data}
+if (!file.exists("../data/fb_slb_data/")) {
+  # Obtain FB / SLB country() data
+  fb_presences_country <- country(server = "fishbase")
+  slb_presences_country <- country(server = "sealifebase")
+  
+  fb_species_codes <- fb_tbl("species", server = "fishbase")
+  slb_species_codes <- fb_tbl("species", server = "sealifebase")
+  
+  # Add in genus / species sciname combination so faoareas() can read it
+  fb_species_codes <- fb_species_codes %>%
+    mutate(TrueSpecies = Species, Species = paste0(Genus," ",Species)) %>%
+    relocate(TrueSpecies, .before = Species)
+  
+  slb_species_codes <- slb_species_codes %>%
+    mutate(TrueSpecies = Species, Species = paste0(Genus," ",Species)) %>%
+    relocate(TrueSpecies, .before = Species)
+  
+  # Join FB / SLB country() to species codes
+  fb_presences_country <- fb_presences_country %>%
+    left_join(fb_species_codes[,c("SpecCode","Species", "TrueSpecies", "Genus")], by = "SpecCode")
+  
+  slb_presences_country <- slb_presences_country %>%
+    left_join(slb_species_codes[,c("SpecCode","Species", "TrueSpecies", "Genus")], by = "SpecCode")
+  
+  # Obtain FB / SLB faoareas() data
+  fb_presences_faoareas <- faoareas(species_list = fb_species_codes$Species, server = "fishbase")
+  slb_presences_faoareas <- faoareas(species_list = fb_species_codes$Species, server = "sealifebase")
+  
+  # Create new directory for FB/SLB data
+  dir.create("../data/fb_slb_data")
+  
+  # Write files to .parquet
+  write_parquet(fb_presences_country, "../data/fb_slb_data/fb_presences_country.parquet")
+  write_parquet(slb_presences_country, "../data/fb_slb_data/slb_presences_country.parquet")
+  write_parquet(fb_presences_faoareas, "../data/fb_slb_data/fb_presences_faoareas.parquet")
+  write_parquet(slb_presences_faoareas, "../data/fb_slb_data/slb_presences_faoareas.parquet")
+  write_parquet(slb_species_codes, "../data/fb_slb_data/fb_species_codes")
+  write_parquet(slb_species_codes, "../data/fb_slb_data/slb_species_codes.parquet")
+}
 ```
 
 > Last date obtained: 12/25/2024

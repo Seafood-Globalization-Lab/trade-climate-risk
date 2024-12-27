@@ -337,7 +337,7 @@ for (i in 1:length(file_names)) {
   # Select only certain variables for certain years and pivot wider
   df_i <- df_i %>%
     filter(year %in% c(2030, 2050, 2100)) %>%
-    mutate(year_ssp = paste0(year, ssp), sciname = tolower(paste(genus, species))) %>%
+    mutate(year_ssp = paste0(year, ssp), sciname = str_to_lower(paste(genus, species))) %>%
     select(sciname, eez_name, year_ssp, mean_per_change) %>%
     pivot_wider(names_from = year_ssp, values_from = mean_per_change)
   
@@ -546,6 +546,9 @@ consumption_sciname %>%
 ```
 
 ```{r add in fishbase / sealifebase data connections}
+# Create instances of fishbase/sealifebase data (if they don't already exist)
+rmarkdown::render("../code/test_script.Rmd")
+
 # Read in fishbase/sealifebase data
 fb_presences_country <- read_parquet("../data/fb_slb_data/fb_presences_country.parquet")
 slb_presences_country <- read_parquet("../data/fb_slb_data/slb_presences_country.parquet")
@@ -805,29 +808,44 @@ fb_slb_commercial_interests <- fb_slb_commercial_interests %>%
 # Step 4: Join full matched species only with fb/slb species of commercial interest
 commercial_products <- inner_join(pa_excluding_artis, fb_slb_commercial_interests, by = c("sciname_joinable_to_fishbase" = "Species", "countries_found" = "country")) %>%
   mutate(presence_or_absence = 1) %>%
-  select(-c(genus, subfamily, family, order, class, superclass, phylum, kingdom)) %>%
   mutate(sciname = str_to_lower(sciname_joinable_to_fishbase))
 
 
 # New problem: Only the genus and species names exist, but not family, order, class, and kingdom. We need to add these in
-# New script to refer to to obtain rgbif taxa data - refer to "accepted" column to filter for target species that we will be getting higher taxa names for.
+# New script to refer to to obtain Global Biodiversity Information Facilility (rgbif) taxa data - refer to "accepted" column to filter for target species that we will be getting higher taxa names for.
 
-# rgbif function
-name_lookup("Abramis brama")
+# commercial_products is fed through this script (takes awhile hence in other script)
+rmarkdown::render("../code/QuirozConnor_SGL_Obtain_gbif_Data.Rmd")
+pa_excluding_artis <- read_parquet("../data/rgbif_data/commercial_products.parquet")
 
-# Filter to get top ranked species will look something like this: 
-commercial_products %>%
-  mutate(genus = sapply(sciname_joinable_to_fishbase, function(x) {
-    name_lookup(x)[[2]] %>%
-      count(genus) %>%
-      arrange(genus) %>%
-      drop_na() %>%
-      pull(genus) %>%
-      .[1]
-  }))
+only_artis_1 <- merged_presence_absence_data_country %>% 
+  filter(joined %in% c("only in artis", "both"))
+pa_only_artis <- bind_rows(only_artis_1, pa_excluding_artis)
+presence_absence_data_country_all_taxa <- data.frame()
+for (i in unique(pa_only_artis$eez_iso3c)) {
+  # Group data by eez country
+  sliced_data <- pa_only_artis %>%
+  filter(eez_iso3c == i)
+
+  # Create updated presence on sliced data
+  sliced_data_for_merging <- sliced_data %>%
+  mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, subfamily, family, order, class, superclass, phylum, kingdom) %>%
+  unlist() %>%
+  unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1, TRUE ~ 0))
+
+  # Combine rows of each country
+  presence_absence_data_country_all_taxa <- bind_rows(presence_absence_data_country_all_taxa, sliced_data_for_merging)
+
+}
+
+# Count Number of presences/absences in filled in presence data
+presence_absence_data_country_all_taxa <- presence_absence_data_country_all_taxa %>%
+  relocate(presence_or_absence_all_taxa, .after = presence_or_absence)
+
+presence_absence_data_country_all_taxa %>%
+  count(presence_or_absence_all_taxa)
+pa_excluding_artis %>% filter()
 ```
-
-
 
 # Data Visualization + Analysis
 
