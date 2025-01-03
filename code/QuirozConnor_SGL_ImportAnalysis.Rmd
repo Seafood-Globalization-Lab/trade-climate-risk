@@ -547,7 +547,7 @@ consumption_sciname %>%
 
 ```{r add in fishbase / sealifebase data connections}
 # Create instances of fishbase/sealifebase data (if they don't already exist)
-rmarkdown::render("../code/test_script.Rmd")
+rmarkdown::render("../code/QuirozConnor_SGL_Obtain_Fishbase_Sealifebase_Data.Rmd")
 
 # Read in fishbase/sealifebase data
 fb_presences_country <- read_parquet("../data/fb_slb_data/fb_presences_country.parquet")
@@ -812,15 +812,24 @@ commercial_products <- inner_join(pa_excluding_artis, fb_slb_commercial_interest
 
 
 # New problem: Only the genus and species names exist, but not family, order, class, and kingdom. We need to add these in
-# New script to refer to to obtain Global Biodiversity Information Facilility (rgbif) taxa data - refer to "accepted" column to filter for target species that we will be getting higher taxa names for.
+# New script to refer to to obtain Global Biodiversity Information Facility (rgbif) taxa data - refer to "accepted" column to filter for target species that we will be getting higher taxa names for.
 
 # commercial_products is fed through this script (takes awhile hence in other script)
 rmarkdown::render("../code/QuirozConnor_SGL_Obtain_gbif_Data.Rmd")
 pa_excluding_artis <- read_parquet("../data/rgbif_data/commercial_products.parquet")
 
+# List of ARTIS species that aren't matched to either fishbase or sealifebase
+unmatched_species <- anti_join(consumption_sciname %>% ungroup() %>% filter(str_detect(sciname_joinable_to_fishbase, " ")), bind_rows(fb_presences_country, slb_presences_country), by = c("sciname_joinable_to_fishbase" = "Species")) %>%
+  distinct(sciname_joinable_to_fishbase) %>%
+  pull(sciname_joinable_to_fishbase)
+
+# Create NA's for ARTIS species that aren't matched to either fishbase or sealifebase
+
+# Re-determine if lower resolution taxa are present with both ARTIS + non-ARTIS species
 only_artis_1 <- merged_presence_absence_data_country %>% 
   filter(joined %in% c("only in artis", "both"))
-pa_only_artis <- bind_rows(only_artis_1, pa_excluding_artis)
+pa_only_artis <- bind_rows(only_artis_1, pa_excluding_artis) %>%
+  mutate(presence_or_absence = case_when(sciname_joinable_to_fishbase %in% unmatched_species ~ NA, TRUE ~ presence_or_absence))
 presence_absence_data_country_all_taxa <- data.frame()
 for (i in unique(pa_only_artis$eez_iso3c)) {
   # Group data by eez country
@@ -831,7 +840,9 @@ for (i in unique(pa_only_artis$eez_iso3c)) {
   sliced_data_for_merging <- sliced_data %>%
   mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, subfamily, family, order, class, superclass, phylum, kingdom) %>%
   unlist() %>%
-  unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1, TRUE ~ 0))
+  unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1,
+sciname_joinable_to_fishbase %in% unmatched_species ~ NA,
+TRUE ~ 0))
 
   # Combine rows of each country
   presence_absence_data_country_all_taxa <- bind_rows(presence_absence_data_country_all_taxa, sliced_data_for_merging)
@@ -844,7 +855,24 @@ presence_absence_data_country_all_taxa <- presence_absence_data_country_all_taxa
 
 presence_absence_data_country_all_taxa %>%
   count(presence_or_absence_all_taxa)
-pa_excluding_artis %>% filter()
+
+fb_presences_country <- fb_presences_country %>%
+  relocate(c(Species, TrueSpecies, Genus), .after = SpecCode) %>%
+  mutate(source = "fishbase") %>%
+  relocate(source, .before = autoctr)
+
+slb_presences_country <- slb_presences_country %>%
+  relocate(c(Species, TrueSpecies, Genus), .after = SpecCode) %>%
+  mutate(source = "sealifebase") %>%
+  relocate(source, .before = autoctr)
+
+# Get data over to Jessica
+# fb_slb_species_data <- bind_rows(fb_presences_country, slb_presences_country)
+# fb_slb_species_data <- fb_slb_species_data %>%
+#   rename(Sciname = Species, Species = TrueSpecies)
+# str(fb_slb_species_data)
+# write_parquet(fb_slb_species_data, "../data/fb_slb_species_data.parquet")
+# write_csv(fb_slb_species_data, "../data/fb_slb_species_data.csv")
 ```
 
 # Data Visualization + Analysis
