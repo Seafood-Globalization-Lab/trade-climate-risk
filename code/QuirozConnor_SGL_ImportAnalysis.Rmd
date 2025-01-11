@@ -15,7 +15,9 @@ library(countrycode)
 library(data.table)
 library(arrow)
 
-# For creating map visualizations + spatial analysis
+# Map creation
+library(rnaturalearth)
+library(rnaturalearthdata)
 library(sf)
 
 # For identifying higher taxa levels
@@ -260,7 +262,7 @@ taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
     
     # Data coverage:
     num_species_artis <- sum(str_detect(
-      unique(consumption_sciname$sciname_joinable_to_fishbase), " "), na.rm = TRUE)
+      unique(scinames_excluding_tradeflows$sciname_joinable_to_fishbase), " "), na.rm = TRUE)
     num_species_fishbase <- artis_fishbase_locations %>%
       summarize(unique_species = length(unique(Species))) %>%
       pull(unique_species)
@@ -277,22 +279,24 @@ taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
     fishbase_country_presences <- artis_fishbase_locations %>%
       filter(Status %in% c("native", "Native", "introduced", "endemic")) %>%
       mutate(eez_name = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
-      group_by(Species) %>%
+      group_by(ScientificName) %>%
       summarize(countries_found = paste0(unique(eez_name), collapse = " ")) %>%
-      rename(sciname_joinable_to_fishbase = "Species")
+      rename(sciname_joinable_to_fishbase = "ScientificName")
     
-    consumption_countries_joined <- full_join(consumption_sciname, fishbase_country_presences, by = "sciname_joinable_to_fishbase")
+    consumption_countries_joined <- left_join(scinames_excluding_tradeflows, fishbase_country_presences, by = "sciname_joinable_to_fishbase")
     
-    # See which entries were successfully joined
+    # # See which entries were successfully joined
+    # consumption_countries_joined <- consumption_countries_joined %>%
+    #   mutate(
+    #     joined = case_when(!is.na(eez_iso3c) & !is.na(countries_found) ~ "both",
+    #                        !is.na(eez_iso3c) ~ "only in artis",
+    #                        TRUE ~ paste0("only in ", data)),
+    #     source = case_when(joined == "both" ~ data,
+    #                        joined == paste0("only in ", data) ~ data,
+    #                        TRUE ~ NA))
+
     consumption_countries_joined <- consumption_countries_joined %>%
-      mutate(
-        joined = case_when(!is.na(eez_iso3c) & !is.na(countries_found) ~ "both",
-                           !is.na(eez_iso3c) ~ "only in artis",
-                           TRUE ~ paste0("only in ", data)),
-        source = case_when(joined == "both" ~ data,
-                           joined == paste0("only in ", data) ~ data,
-                           TRUE ~ NA))
-    # 
+      mutate(source = data)
     # Determine whether a species is present or absent in an EEZ
     consumption_countries_joined <- consumption_countries_joined %>%
       ungroup() %>%
@@ -306,6 +310,22 @@ taxa_presence_or_absence <- function(data = "fishbase", obtain_stats = FALSE) {
   
   
 }
+
+create_map <- function(data, fill = "prop_missing") {
+  world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+world_map <- world_map %>%
+  left_join(data, by = c("iso_a3" = "eez_iso3c"))
+  
+  world_map %>%
+ggplot() +
+  geom_sf(aes(fill = !!sym(fill)), color = "black") + 
+  scale_fill_viridis_c(option = "plasma") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  coord_sf(crs = "+proj=robin")
+}
+pa_excluding_artis %>% distinct(genus) %>% pull(genus)
 ```
 
 
@@ -406,6 +426,17 @@ consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet"
 consumption_all_years <- consumption
 consumption <- consumption %>%
   filter(year == 2019)
+
+# Get unique taxa names (excluding trade flows)
+scinames_excluding_tradeflows <- consumption %>%
+  ungroup() %>%
+  distinct(eez_iso3c, sciname_hs_modified) %>%
+  left_join(sciname, by = c("sciname_hs_modified" = "sciname")) %>%
+  rename(sciname = "sciname_hs_modified") %>%
+  taxa_level_vars() %>%
+  rename(sciname_hs_modified = "sciname") %>%
+  filter(!is.na(sciname_hs_modified)) %>%
+  ungroup()
 
 # Read in taxonomic data
 sciname <- read.csv("../data/sciname.csv")
@@ -560,7 +591,7 @@ fb_species_codes <- read_parquet("../data/fb_slb_data/fb_species_codes")
 slb_species_codes <- read_parquet("../data/fb_slb_data/slb_species_codes.parquet")
 
 # Modify sciname casing so that it can be joined to fishbase
-consumption_sciname <- consumption_sciname %>%
+scinames_excluding_tradeflows <- scinames_excluding_tradeflows %>%
   mutate(sciname_joinable_to_fishbase = str_to_title(word(sciname_hs_modified, 1)), 
          sciname_joinable_to_fishbase2 = word(sciname_hs_modified, 2), 
          sciname_joinable_to_fishbase = ifelse(
@@ -568,20 +599,25 @@ consumption_sciname <- consumption_sciname %>%
         sciname_joinable_to_fishbase,
         paste(sciname_joinable_to_fishbase, sciname_joinable_to_fishbase2))) %>%
   select(-sciname_joinable_to_fishbase2) %>%
-  relocate(sciname_joinable_to_fishbase, .after = sciname)
+  relocate(sciname_joinable_to_fishbase, .after = sciname_hs_modified)
 
 # ***
 # MAKING SURE ARTIS SCINAMES ALIGN WITH FISHBASE
 
-# # of ARTIS unique ID's (includes higher taxonomic levels that aren't only species) - 2232 total IDs
-length(unique(consumption_sciname$sciname_joinable_to_fishbase))
+# # of ARTIS unique ID's (includes higher taxonomic levels that aren't only species) - 1666 total IDs
+length(unique(scinames_excluding_tradeflows$sciname_joinable_to_fishbase))
 
-length(unique(consumption$sciname_hs_modified))
+length(!is.na(unique(consumption$sciname_hs_modified)))
 
-# # of ARTIS species (1780 species - shouldn't be more than Fishbase?)
-sum(str_detect(unique(na.omit(consumption_sciname$sciname)), " "))
+# # of ARTIS species (1326 species)
+scinames_excluding_tradeflows %>%
+  ungroup() %>%
+  filter(str_detect(sciname_hs_modified, " ")) %>%
+  distinct(sciname_hs_modified) %>%
+  pull(sciname_hs_modified) %>%
+  length()
 
-# 1326 species with sciname_hs_modified variable (This seems more right) - less than 
+# 1326 species with sciname_hs_modified variable
 sum(str_detect(unique(na.omit(consumption_sciname$sciname_hs_modified)), " "))
 
 # Unique entries in Fishbase (i.e., # of ARTIS species successfully joined to fishbase - 1382 species)
@@ -595,7 +631,7 @@ sum(str_detect(unique(artis_fishbase_locations$Species), " "))
 
 
 # Get unique taxonomic entries (no repeats)
-unique_taxonomy_entries <- taxa_level_vars(consumption_sciname, ungroup = TRUE)
+unique_taxonomy_entries <- scinames_excluding_tradeflows
 
 # Determines whether something is reported to **at least** a given taxonomic level
 unique_taxonomy_entries <- at_least_vars(unique_taxonomy_entries)
@@ -662,15 +698,8 @@ fishbase_presences_country <- taxa_presence_or_absence(data = "fishbase")
 sealifebase_presences_country <- taxa_presence_or_absence(data = "sealifebase")
 
 # Number of rows in ARTIS data (fishbase + sealifebase presence data)
-fishbase_presences_country %>%
-  count(presence_or_absence) %>%
-  summarize(sum = sum(n)) %>%
-  pull(sum)
-
-sealifebase_presences_country %>%
-  count(presence_or_absence) %>%
-  summarize(sum = sum(n)) %>%
-  pull(sum)
+nrow(fishbase_presences_country)
+nrow(sealifebase_presences_country)
 
 
 fishbase_presences_country %>%
@@ -680,8 +709,7 @@ fishbase_presences_country %>%
 any(sealifebase_presences_country$Species %in% artis_fishbase_locations$Species)
 
 # Filter to only have sealifebase data (separate out sealifebase base using source variable)
-only_sealifebase <- sealifebase_presences_country %>%
-  filter(source == "sealifebase")
+only_sealifebase <- sealifebase_presences_country
 
 # Get indexes where sealifebase found presences or absences
 sealifebase_presence_absences_indexes <- which(sealifebase_presences_country$presence_or_absence %in% c(0,1))
@@ -694,17 +722,20 @@ fishbase_minus_sealifebase <- fishbase_presences_country[-sealifebase_presence_a
 merged_presence_absence_data_country <- bind_rows(fishbase_minus_sealifebase, only_sealifebase)
 
 merged_presence_absence_data_country <- merged_presence_absence_data_country %>%
-  mutate(species = case_when(str_detect(sciname, " ") ~ sciname, TRUE ~ NA)) %>%
-  relocate(species, .before = genus)
+  mutate(species = case_when(str_detect(sciname_hs_modified, " ") ~ sapply(str_split(sciname_hs_modified, " "), `[`, 1),
+                             TRUE ~ NA))
 
 # List of ARTIS species that aren't matched to either fishbase or sealifebase
-unmatched_species <- anti_join(consumption_sciname %>% ungroup() %>% filter(str_detect(sciname_joinable_to_fishbase, " ")), bind_rows(fb_presences_country, slb_presences_country), by = c("sciname_joinable_to_fishbase" = "Species")) %>%
+unmatched_species <- anti_join(scinames_excluding_tradeflows %>% ungroup() %>% filter(str_detect(sciname_joinable_to_fishbase, " ")) %>% group_by(sciname_joinable_to_fishbase) %>% distinct(sciname_joinable_to_fishbase), bind_rows(fb_presences_country, slb_presences_country), by = c("sciname_joinable_to_fishbase" = "ScientificName")) %>%
   distinct(sciname_joinable_to_fishbase) %>%
   pull(sciname_joinable_to_fishbase)
 
+# Commercial 
+unmatched_fbslb_side <- anti_join(bind_rows(fb_presences_country %>% mutate(source = "fishbase"), slb_presences_country %>% mutate(source = "sealifebase")), scinames_excluding_tradeflows %>% ungroup() %>% filter(str_detect(sciname_joinable_to_fishbase, " ")) %>% group_by(sciname_joinable_to_fishbase) %>% distinct(sciname_joinable_to_fishbase), by = c("ScientificName" = "sciname_joinable_to_fishbase")) %>%
+  filter((Status %in% c("native", "Native", "introduced", "endemic") & !is.na(country)) & (Importance %in% c("minor commercial", "highly commercial", "commercial", "subsistence fisheries", "of potential interest"))) 
+
 # Determine if lower resolution taxa are in an eez (e.g., if a species for a given country is found there that is also a lower resolution taxa like actinoptergyii, then all actinoptergyii or higher will be found in that country) -
-pa_only_artis <- merged_presence_absence_data_country %>% 
-  filter(joined %in% c("only in artis", "both")) %>%
+pa_only_artis <- merged_presence_absence_data_country %>%
   mutate(presence_or_absence = case_when(sciname_joinable_to_fishbase %in% unmatched_species ~ NA, TRUE ~ presence_or_absence))
 
 presence_absence_data_country_all_taxa <- data.frame()
@@ -715,10 +746,11 @@ for (i in unique(pa_only_artis$eez_iso3c)) {
 
   # Create updated presence on sliced data
   sliced_data_for_merging <- sliced_data %>%
-  mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, subfamily, family, order, class, superclass, phylum, kingdom) %>%
+  mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname_hs_modified, species, genus, subfamily, family, order, class, superclass, phylum, kingdom) %>%
   unlist() %>%
-  unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1, 
-                                                                                    sciname_joinable_to_fishbase %in%
+  unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(presence_or_absence == 1 ~ 1,
+                                                                                    str_detect(unique_vals, sciname_hs_modified) ~ 1, 
+                                                                                    sciname_hs_modified %in%
                                                                                     unmatched_species ~ NA,
                                                                                     TRUE ~ 0))
 
@@ -735,24 +767,17 @@ presence_absence_data_country_all_taxa <- presence_absence_data_country_all_taxa
 presence_absence_data_country_all_taxa %>%
   count(presence_or_absence_all_taxa)
 
-# Exploring proportion of absent data
-presence_absence_data_linked_unlinked %>%
+# See which countries are absent
+presence_absence_data_country_all_taxa %>%
   group_by(eez_iso3c) %>%
-  distinct(sciname, .keep_all = TRUE) %>%
-  select(sciname, presence_or_absence_all_taxa) %>%
+  distinct(sciname_hs_modified, .keep_all = TRUE) %>%
+  select(sciname_hs_modified, presence_or_absence_all_taxa) %>%
   count(presence_or_absence_all_taxa) %>%
   mutate(presence_or_absence_all_taxa = as.character(presence_or_absence_all_taxa)) %>%
   pivot_wider(values_from = n, names_from = presence_or_absence_all_taxa, names_glue = "quantity_{presence_or_absence_all_taxa}") %>%
   mutate(prop_missing =  quantity_0 / (quantity_0 + quantity_1)) %>%
   filter(is.na(prop_missing) & is.na(quantity_1)) %>%
   rename(number_absences = "quantity_0", number_presences = "quantity_1")
-
-# Code my brother put in lol
-michael <- 'the best brother' 
- 
-sean <- 'alright I guess'
-
-print(c('michael is', michael, 'and sean is',sean ))
 
 # Get species that aren't apart of artis, but are only included in fishbase/sealife base (extra species locations we need to )
 pa_excluding_artis <- merged_presence_absence_data_country %>%
@@ -845,7 +870,7 @@ for (i in unique(pa_only_artis$eez_iso3c)) {
   mutate(unique_vals = str_replace_all(paste0(filter(., presence_or_absence == 1) %>% select(sciname, species, genus, subfamily, family, order, class, superclass, phylum, kingdom) %>%
   unlist() %>%
   unique(), collapse = " "), "[A-Z]", ""), presence_or_absence_all_taxa = case_when(str_detect(unique_vals, sciname) ~ 1,
-sciname_joinable_to_fishbase %in% unmatched_species ~ NA,
+sciname %in% unmatched_species ~ NA,
 TRUE ~ 0))
 
   # Combine rows of each country
@@ -870,6 +895,17 @@ slb_presences_country <- slb_presences_country %>%
   mutate(source = "sealifebase") %>%
   relocate(source, .before = autoctr)
 
+# See which countries are absent
+linked_unlinked_props <- presence_absence_data_linked_unlinked %>%
+  group_by(eez_iso3c) %>%
+  distinct(sciname, .keep_all = TRUE) %>%
+  select(sciname, presence_or_absence_all_taxa) %>%
+  count(presence_or_absence_all_taxa) %>%
+  mutate(presence_or_absence_all_taxa = as.character(presence_or_absence_all_taxa)) %>%
+  pivot_wider(values_from = n, names_from = presence_or_absence_all_taxa, names_glue = "quantity_{presence_or_absence_all_taxa}") %>%
+  mutate(prop_missing =  quantity_0 / (quantity_0 + quantity_1)) %>%
+  rename(number_absences = "quantity_0", number_presences = "quantity_1")
+
 # Get data over to Jessica
 # fb_slb_species_data <- bind_rows(fb_presences_country, slb_presences_country)
 # fb_slb_species_data <- fb_slb_species_data %>%
@@ -877,6 +913,10 @@ slb_presences_country <- slb_presences_country %>%
 # str(fb_slb_species_data)
 # write_parquet(fb_slb_species_data, "../data/fb_slb_species_data.parquet")
 # write_csv(fb_slb_species_data, "../data/fb_slb_species_data.csv")
+presence_absence_data_country_all_taxa %>%
+  filter(taxa_level == "species") %>%
+  ungroup() %>%
+  distinct(sciname_hs_modified, .keep_all = TRUE)
 ```
 
 # Data Visualization + Analysis
@@ -1075,6 +1115,10 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
       theme(axis.title.y=element_blank(),
         axis.text.y=element_blank(),
         axis.ticks.y=element_blank()))
+
+# Create maps
+prop_map <- create_map(linked_unlinked_props) +
+  labs(fill = "Prop of taxa reported as absent")
   
 # ANOVA testing prop at least species vs region
 leveneTest(prop_at_least_species ~ region, data = con_joined)
@@ -1124,4 +1168,6 @@ ggsave("../images/ssp_projections.jpg", plot = ssp_projections, device = "jpeg",
 ggsave("../images/prop_versus_tax_versus_country.jpg", plot = prop_versus_tax_versus_country, device = "jpeg", height = 4, width = 9, units = "in")
 
 ggsave("../images/prop_absences.jpg", plot = prop_absences, device = "jpeg", height = 3, width = 5, units = "in")
+
+ggsave("../images/prop_map.jpg", plot = prop_map, device = "jpeg", width = 6, height = 4)
 ```
