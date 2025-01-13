@@ -37,7 +37,7 @@ if (!file.exists("../data/fb_slb_data/")) {
 
   slb_species_codes <- load_taxa(server = "sealifebase") %>%
     rename(ScientificName = "Species") %>%
-    mutate(Species = sapply(str_split(ScientificName, " "), `[`, 1)) %>%
+    mutate(Species = sapply(str_split(ScientificName, " "), `[`, 2)) %>%
     relocate(Species, .before = Genus)
   
   # Join FB / SLB country() to species codes
@@ -70,4 +70,4 @@ if (!file.exists("../data/fb_slb_data/")) {
 }
 ```
 
-> Last date obtained: 1/10/2025
+> Last date obtained: 1/13/2025
