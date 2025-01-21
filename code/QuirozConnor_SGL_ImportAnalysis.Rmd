@@ -39,37 +39,66 @@ library(rfishbase)
 ```
 
 ```{r initialize functions}
-at_least_vars <- function(data) {
-  if (any(names(data) %in% "producer_iso3c")) {
-    data %>%
-      group_by(producer_iso3c, sciname) %>%
+# Function description
+# grouping: Define which variable you want to group by
+# taxa_var: input the name of the taxa variable you want to search for (e.g., "taxa_var = sciname_hs_modified" will run operations on that variable)
+at_least_vars <- function(data = con_joined, grouping = "producer_iso3c", taxa_var = "sciname") {
+  if (any(names(data) %in% grouping)) {
+    new_data <- data %>%
+      group_by(!!sym(grouping), !!sym(taxa_var)) %>%
       mutate(
-        at_least_genus = case_when(taxa_level == "species" |
-                                     taxa_level == "genus" ~ 1, TRUE ~ 0),
+        at_least_species = case_when(
+          taxa_level == "species" ~ 1, TRUE ~ 0),
+        at_least_genus = case_when(
+          taxa_level == "species" |
+          taxa_level == "genus" ~ 1, TRUE ~ 0),
         at_least_family = case_when(
           taxa_level == "species" |
-            taxa_level == "genus" | taxa_level == "family" ~ 1,
+          taxa_level == "genus" |
+          taxa_level == "family" ~ 1,
           TRUE ~ 0
         ),
         at_least_order = case_when(
           taxa_level == "species" |
             taxa_level == "genus" |
-            taxa_level == "family" | taxa_level == "order" ~ 1,
+            taxa_level == "family" |
+            taxa_level == "order" ~ 1,
           TRUE ~ 0
         ),
         at_least_class = case_when(
           taxa_level == "species" |
             taxa_level == "genus" |
             taxa_level == "family" |
-            taxa_level == "order" | taxa_level == "class" ~ 1,
+            taxa_level == "order" | 
+            taxa_level == "class" ~ 1,
+          TRUE ~ 0
+        ),
+        at_least_phylum = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" |
+            taxa_level == "family" |
+            taxa_level == "order" | 
+            taxa_level == "class" |
+            taxa_level == "phylum" ~ 1,
+          TRUE ~ 0
+        ),
+        at_least_kingdom = case_when(
+          taxa_level == "species" |
+            taxa_level == "genus" |
+            taxa_level == "family" |
+            taxa_level == "order" | 
+            taxa_level == "class" |
+            taxa_level == "phylum" |
+            taxa_level == "kingdom" ~ 1,
           TRUE ~ 0
         )
       )
   }
   else {
-    data %>%
-      group_by(sciname) %>%
+    new_data <- data %>%
+      group_by(!!sym(taxa_var)) %>%
       mutate(
+        at_least_species = case_when(taxa_level == "species" ~ 1, TRUE ~ 0),
         at_least_genus = case_when(taxa_level == "species" |
                                      taxa_level == "genus" ~ 1, TRUE ~ 0),
         at_least_family = case_when(
@@ -87,29 +116,44 @@ at_least_vars <- function(data) {
           taxa_level == "species" |
             taxa_level == "genus" |
             taxa_level == "family" |
-            taxa_level == "order" | taxa_level == "class" ~ 1,
+            taxa_level == "order" | 
+            taxa_level == "class" ~ 1,
           TRUE ~ 0
         )
       )
   }
+  
+  # Copy input data to use throughout loop
+  data_1 <- data
+  # Calculate proportions for which a country reports to X taxa level
+  for (i in c("species", "genus", "family", "order", "class", "phylum", "kingdom")) {
+  con_prop_group <- new_data %>%
+    group_by(!!sym(grouping)) %>%
+    summarize(!!paste0("prop_at_least_", i) := sum(!!sym(paste0("at_least_",i))) / n()) %>%
+    ungroup()
+  
+  # Join prop of each phylogenetic group to already joined consumption dataset
+  data_1 <- data_1 %>%
+      left_join(con_prop_group, by = grouping)
+
+  }
+  return(data_1)
 }
 
-
-
-taxa_level_vars <- function(data, ungroup = FALSE) {
+taxa_level_vars <- function(data, taxa_var = "sciname",ungroup = FALSE) {
   if (ungroup == FALSE) {
     data %>%
       mutate(
         taxa_level = case_when(
-          sciname == kingdom ~ "kingdom",
-          sciname == phylum ~ "phylum",
-          sciname == superclass ~ "superclass",
-          sciname == class ~ "class",
-          sciname == order ~ "order",
-          sciname == family ~ "family",
-          sciname == subfamily ~ "subfamily",
-          sciname == genus ~ "genus",
-          str_detect(sciname, pattern = "\ ") ~ "species"
+          !!sym(taxa_var) == kingdom ~ "kingdom",
+          !!sym(taxa_var) == phylum ~ "phylum",
+          !!sym(taxa_var) == superclass ~ "superclass",
+          !!sym(taxa_var) == class ~ "class",
+          !!sym(taxa_var) == order ~ "order",
+          !!sym(taxa_var) == family ~ "family",
+          !!sym(taxa_var) == subfamily ~ "subfamily",
+          !!sym(taxa_var) == genus ~ "genus",
+          str_detect(!!sym(taxa_var), pattern = "\ ") ~ "species"
         )
       )
   }
@@ -121,15 +165,15 @@ taxa_level_vars <- function(data, ungroup = FALSE) {
       left_join(sciname, by = "sciname") %>%
       mutate(
         taxa_level = case_when(
-          sciname == kingdom ~ "kingdom",
-          sciname == phylum ~ "phylum",
-          sciname == superclass ~ "superclass",
-          sciname == class ~ "class",
-          sciname == order ~ "order",
-          sciname == family ~ "family",
-          sciname == subfamily ~ "subfamily",
-          sciname == genus ~ "genus",
-          str_detect(sciname, pattern = "\ ") ~ "species"
+          !!sym(taxa_var) == kingdom ~ "kingdom",
+          !!sym(taxa_var) == phylum ~ "phylum",
+          !!sym(taxa_var) == superclass ~ "superclass",
+          !!sym(taxa_var) == class ~ "class",
+          !!sym(taxa_var) == order ~ "order",
+          !!sym(taxa_var) == family ~ "family",
+          !!sym(taxa_var) == subfamily ~ "subfamily",
+          !!sym(taxa_var) == genus ~ "genus",
+          str_detect(!!sym(taxa_var), pattern = "\ ") ~ "species"
         )
       )
   }
@@ -425,7 +469,7 @@ df_postprocessed <- df_postprocessed %>%
   rename(eez_iso3c = "eez_name")
 
 # Add in unmatched countries (now all countries are matched)
-df <- rbind(df, df_postprocessed)
+df <- bind_rows(df, df_postprocessed)
 ```
 
 ```{r data cleaning for hdi + consumption data}
@@ -508,34 +552,11 @@ levels <- levels[!(levels %in% c("superclass", "species", "phylum"))]
 
 # Proportions of producing countries reporting to **at least** that taxonomic level (should be cumulative probabilities)
 # Set up whether a producing country reported to at least a certain level (1 means it could also go lower (e.g., 1 in class means it could be just class or goes all the way to species))
-consumption_sciname <- at_least_vars(consumption_sciname)
-
-for (i in levels) {
-  con_actual_group <- consumption_sciname %>%
-    group_by(producer_iso3c) %>%
-    summarize(!!paste0("prop_at_least_", i) := sum(!!sym(paste0("at_least_",i))) / n()) %>%
-    rename(consumer_iso3c = "producer_iso3c")
-  
-  # Join prop of each phylogenetic group to already joined consumption dataset
-  con_joined <-
-    left_join(con_joined, con_actual_group, by = "consumer_iso3c")
-  
-}
+consumption_sciname <- at_least_vars(data = consumption_sciname) %>%
+    rename(consumer_iso3c = producer_iso3c)
 
 # Add back in species
 levels <- c("species", "genus", "family", "order", "class")
-
-# Proportions of producing countries reporting to exactly that taxonomic level.
-for (i in levels) {
-  con_actual_group <- consumption_sciname %>%
-    group_by(producer_iso3c) %>%
-    summarize(!!paste0("prop_exactly_", i) := sum(taxa_level == i) / n(), .groups = "drop") %>%
-    rename(consumer_iso3c = "producer_iso3c")
-  
-  # Join props of each phylogenetic group
-  con_joined <- left_join(con_joined, con_actual_group, by = "consumer_iso3c")
-  
-}
 
 # Percentage of countries that report to species (no species column in sciname data - have to do different way from rest of taxonomic groups)
 con_joined <- con_joined %>%
@@ -582,8 +603,6 @@ length(unique(consumption_sciname$family))
 consumption_sciname %>%
   group_by(eez_iso3c) %>%
   summarize(total_order = length(unique(order)))
-
-consumption %>% ungroup() %>% filter(!str_detect(sciname_hs_modified, " "))
 ```
 
 ```{r add in fishbase / sealifebase data connections}
@@ -661,8 +680,8 @@ for (i in levels) {
     pull(sum)
   total <- length(unique_taxonomy_entries$sciname)
   prop <- amount / total
-  taxa_unreported_props <- rbind(taxa_unreported_props, list(i, round(prop, 2)))
-  taxa_unreported_quantity <- rbind(taxa_unreported_quantity, list(i, total))
+  taxa_unreported_props <- bind_rows(taxa_unreported_props, list(i, round(prop, 2)))
+  taxa_unreported_quantity <- bind_rows(taxa_unreported_quantity, list(i, total))
 }
 
 # Rename taxa_total variables
@@ -691,7 +710,7 @@ print(taxa_unreported_quantity)
 # fishbase_minus_sealifebase <- fishbase_presences_faoareas[-sealifebase_presence_absences_indexes,]
 # 
 # # Merce fishbase / sealifebase presence data - this will be the data that we use to interpolate higher taxonomic resolutions!
-# merged_presence_absence_data_faoareas <- rbind(fishbase_minus_sealifebase, only_sealifebase)
+# merged_presence_absence_data_faoareas <- bind_rows(fishbase_minus_sealifebase, only_sealifebase)
 # 
 # merged_presence_absence_data_faoareas %>%
 #   count(presence_or_absence)
@@ -892,18 +911,65 @@ fb_slb_commercial_interests <- fb_slb_commercial_interests %>%
          kingdom = "Kingdom", 
          eez_iso3c = "country")
 
-# New problem: Only the genus and species names exist, but not family, order, class, and kingdom. We need to add these in
-# New script to refer to to obtain Global Biodiversity Information Facility (rgbif) taxa data - refer to "accepted" column to filter for target species that we will be getting higher taxa names for.
+# FB/SLB does not have superclass/phylum/kingdom, so we will first (1) match with artis to obtain superclass, phylum, and kingdom, and fill in the rest with rgbif
 
-# commercial_products is fed through this script (takes awhile hence in other script)
-# rmarkdown::render("../code/QuirozConnor_SGL_Obtain_gbif_Data.Rmd")
-# pa_excluding_artis <- read_parquet("../data/rgbif_data/commercial_products.parquet")
+# Get class names for fb_slb data (will combine with artis_scinames to get phylum, kingdom, which fishbase does not have)
+class_taxa_names <- fb_slb_commercial_interests %>%
+  ungroup() %>%
+  distinct(class) %>%
+  pull(class)
 
-# Create NA's for ARTIS species that aren't matched to either fishbase or sealifebase
+# Create an empty list
+superclass_phylum_kingdom <- data.frame(class = class_taxa_names, superclass = NA_character_, phylum = NA_character_, kingdom = NA_character_)
+for (i in class_taxa_names) {
+  matched_scinames <- sciname %>%
+    filter(class == i) %>%
+    distinct(superclass, phylum, kingdom) %>%
+    select(superclass, phylum, kingdom)
+  
+  # Check to see if dataframe is empty or not
+  if (dim(matched_scinames)[1] == 0) {
+    matched_scinames <- data.frame(superclass = NA_character_,
+                                            phylum = NA_character_,
+                                            kingdom = NA_character_)
+  }
+  k <- which(class_taxa_names == i) # Currentl index in class list
+  # Add entries into a list
+  superclass_phylum_kingdom$superclass[k] <- matched_scinames$superclass
+  superclass_phylum_kingdom$phylum[k] <- matched_scinames$phylum
+  superclass_phylum_kingdom$kingdom[k] <- matched_scinames$kingdom
+}
+
+taxa_to_be_filled <- superclass_phylum_kingdom %>%
+  filter(is.na(superclass) |
+         is.na(phylum) |
+         is.na(kingdom))
+
+# New script to refer to to obtain Global Biodiversity Information Facility (rgbif) taxa data - refer to "accepted" column to filter for target species that we will be getting the missing phylum / kingdom names
+
+# taxa_to_be_filled is fed through this script to fill in phylum/kingdom names (takes awhile hence why another script was created)
+rmarkdown::render("../code/QuirozConnor_SGL_Obtain_gbif_Data.Rmd")
+taxa_to_be_filled_gbif <- read_parquet("../data/rgbif_data/taxa_to_be_filled_gbif.parquet")
+
+# Combine rows fb/slb unlinked names that didn't need filling in + filled in phylum/kingdom names obtained via gbif
+filled_fb_slb_taxa <- bind_rows(superclass_phylum_kingdom %>%
+  filter(!is.na(superclass) &
+         !is.na(phylum) &
+         !is.na(kingdom)), taxa_to_be_filled_gbif)
+
+
+# Fill in the rest of the phylum/kingdom names with gbif
+fb_slb_commercial_interests <- left_join(fb_slb_commercial_interests, filled_fb_slb_taxa, by = "class") %>%
+mutate(
+  superclass = coalesce(superclass.x, superclass.y), # If superclass.x is NA, take superclass.y
+  phylum = coalesce(phylum.x, phylum.y),  # Similarly for phylum
+  kingdom = coalesce(kingdom.x, kingdom.y)) %>% # Similarly for kingdom
+select(-phylum.x, -phylum.y, -kingdom.x, -kingdom.y, -superclass.x, -superclass.y)
 
 # Re-determine if lower resolution taxa are present with both ARTIS + non-ARTIS species
 only_artis_1 <- merged_presence_absence_data_country
 
+# Combine only artis species with fb/slb commercial species NOT in artis (used to increase amount of presences in data via country function)
 pa_only_artis <- bind_rows(only_artis_1, fb_slb_commercial_interests %>% mutate(source = "unlinked")) %>%
   mutate(presence_or_absence = case_when(sciname_joinable_to_fishbase %in% species_not_in_artis ~ NA, TRUE ~ presence_or_absence))
 presence_absence_data_linked_unlinked <- data.frame()
@@ -957,11 +1023,36 @@ linked_unlinked_props %>%
 # str(fb_slb_species_data)
 # write_parquet(fb_slb_species_data, "../data/fb_slb_species_data.parquet")
 # write_csv(fb_slb_species_data, "../data/fb_slb_species_data.csv")
-
-scinames_excluding_tradeflows %>% filter(str_detect(sciname_hs_modified, "abramis brama"))
-
-fb_slb_commercial_interests %>% ungroup() %>% distinct(sciname_hs_modified) %>% pull(sciname_hs_modified)
 ```
+
+```{r INTERPOLATION}
+# Create data that is prepared for interpolation (slb + artis presence data with taxa names for target taxa level and **above**)
+# Our goal: Estimate taxa levels below ones that aren't high resolution (e.g., order --> family)
+data_for_interpolation <- taxa_level_vars(data = presence_absence_data_linked_unlinked, taxa_var = "sciname_hs_modified") %>%
+  at_least_vars(grouping = "eez_iso3c", taxa_var = "sciname_hs_modified") %>%
+  select(-unique_vals, -presence_or_absence, -countries_found, -isscaap) %>%
+  relocate(species, .before = "genus")
+
+
+data_for_interpolation <- left_join(data_for_interpolation, linked_unlinked_props, by = "eez_iso3c") %>%
+  select(-number_absences, -number_presences, -quantity_NA)
+
+# Linear model measuring prop missing versus prop of stock reported to species
+lm(prop_missing ~ prop_at_least_species, data = data_for_interpolation) %>%
+  summary()
+
+# See which countries have the most missing taxa
+data_for_interpolation %>%
+  filter(source != "unlinked" | is.na(source)) %>%
+  group_by(eez_iso3c) %>%
+  distinct(prop_missing) %>%
+  arrange(-prop_missing)
+
+data_for_interpolation %>%
+  filter(eez_iso3c == "PSE") %>%
+  select(sciname_hs_modified, taxa_level, presence_or_absence_all_taxa, class)
+```
+
 
 # Data Visualization + Analysis
 
@@ -1169,6 +1260,23 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
  
 (prop_map_linked_unlinked <- create_map(linked_unlinked_props) +
   labs(fill = "Prop of taxa reported as absent"))
+
+# Prop taxa repoted vs prop absences
+ for (i in c("species", "genus", "family", "order", "class", "phylum", "kingdom")) {
+  graph <- data_for_interpolation %>%
+  group_by(eez_iso3c) %>%
+  distinct(prop_missing, !!sym(paste0("prop_at_least_", i))) %>%
+  exploreARTIS::add_region("eez_iso3c", region.col.name = "region") %>%
+  ggplot(aes(y = prop_missing, x = !!sym(paste0("prop_at_least_", i)), color = region)) +
+  geom_point() +
+  scale_color_manual(values = artis_palette(6)) +
+  theme_light() +
+  labs(x = paste0("Proportion EEZ taxa reported to ", i), y = "Proportion reported as absent", color = "Region") +
+    xlim(0,1)
+  
+  ggsave(paste0("../images/prop_absences_vs_prop_", i, ".jpg"), plot = graph, device = "jpeg", width = 6, height = 4)
+ }
+
   
 # ANOVA testing prop at least species vs region
 leveneTest(prop_at_least_species ~ region, data = con_joined)

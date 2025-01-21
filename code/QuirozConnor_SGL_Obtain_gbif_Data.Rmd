@@ -24,78 +24,44 @@ library(arrow)
 ```{r aquire gbif data that matches with commercial data}
 if (!file.exists("../data/rgbif_data/commercial_higher_taxa_names.parquet")) {
   # Get commercial scinames
-  scientific_names <- commercial_products %>%
-    distinct(sciname_joinable_to_fishbase) %>%
+  scientific_names <- taxa_to_be_filled %>%
+    distinct(class) %>%
     drop_na() %>%
-    pull(sciname_joinable_to_fishbase)
-  
+    pull(class)
+
   # Loop over the species and get genus, then save results
   commercial_higher_taxa_names <- data.frame()
-  for (i in 1:length(scientific_names)) {
-    iteration_data <- name_lookup(scientific_names[i])[[2]]
+  for (i in scientific_names) {
+    iteration_data <- name_lookup(i, rank = "class")[[2]]
     commercial_higher_taxa_names <- bind_rows(commercial_higher_taxa_names, iteration_data)
   }
-  
   # Create new directory for rgbif data
   dir.create("../data/rgbif_data")
   
   # Save the data frame to an RDS file (efficient for later loading)
   write_parquet(commercial_higher_taxa_names, "../data/rgbif_data/commercial_higher_taxa_names.parquet")
-  read_parquet("../data/rgbif_data/commercial_higher_taxa_names.parquet") %>%
-    count(accepted) %>% 
-    arrange(-n)
 }
 ```
-> Last date obtained: 12/26/2024
+> Last date obtained: 1/18/2024
 
 ```{r match commercial scientific names to their higher taxa names (i.e., family, order, class, phylum, kingdom)}
-
-if (!file.exists("../data/rgbif_data/commercial_products.parquet")) {
+if (!file.exists("../data/rgbif_data/taxa_to_be_filled_gbif.parquet")) {
   # Ideally only run this code once as it takes awhile
-commercial_products <- commercial_products %>%
+  # This mutate will: (1) run through the gbif libraries of taxa related to the classes of interest (that don't already have phylum or kingdom data; (2) pick the most common phylum/kingdom names found within the library to fill in the missing phylum/kingdom names.
+taxa_to_be_filled_gbif <- taxa_to_be_filled %>%
   mutate(
-    species = TrueSpecies,
-    genus = Genus,
-    # Apply across to mutate multiple columns (family, order, class)
-    family = map_chr(sciname_joinable_to_fishbase, ~ {
-      result <- commercial_gbif %>%
-        filter(str_detect(scientificName, .x)) %>%
-        count(family) %>%  # Count occurrences of each accepted name
-        arrange(desc(n)) %>%  # Arrange by count (descending)
-        drop_na() %>%
-        pull(family)  # Pull the family column after filtering and processing
-      if (length(result) > 0) result[1] else NA_character_  # Return first result or NA
-    }),
-    order = map_chr(sciname_joinable_to_fishbase, ~ {
-      result <- commercial_gbif %>%
-        filter(str_detect(scientificName, .x)) %>%
-        count(order) %>%
-        arrange(desc(n)) %>%
-        drop_na() %>%
-        pull(order)
-      if (length(result) > 0) result[1] else NA_character_
-    }),
-    class = map_chr(sciname_joinable_to_fishbase, ~ {
-      result <- commercial_gbif %>%
-        filter(str_detect(scientificName, .x)) %>%
-        count(class) %>%
-        arrange(desc(n)) %>%
-        drop_na() %>%
-        pull(class)
-      if (length(result) > 0) result[1] else NA_character_
-    }),
-    phylum = map_chr(sciname_joinable_to_fishbase, ~ {
-      result <- commercial_gbif %>%
-        filter(str_detect(scientificName, .x)) %>%
+    phylum = map_chr(class, ~ {
+      result <- commercial_higher_taxa_names %>%
+        filter(str_detect(str_to_lower(scientificName), .x)) %>%
         count(phylum) %>%
         arrange(desc(n)) %>%
         drop_na() %>%
         pull(phylum)
       if (length(result) > 0) result[1] else NA_character_
     }),
-    kingdom = map_chr(sciname_joinable_to_fishbase, ~ {
-      result <- commercial_gbif %>%
-        filter(str_detect(scientificName, .x)) %>%
+    kingdom = map_chr(class, ~ {
+      result <- commercial_higher_taxa_names %>%
+        filter(str_detect(str_to_lower(scientificName), .x)) %>%
         count(kingdom) %>%
         arrange(desc(n)) %>%
         drop_na() %>%
@@ -103,17 +69,11 @@ commercial_products <- commercial_products %>%
       if (length(result) > 0) result[1] else NA_character_
     })
   ) %>%
-  select(-c(TrueSpecies, Genus))
+    mutate(phylum = str_to_lower(phylum),
+           kingdom = str_to_lower(kingdom))
 
-  commercial_products <- commercial_products %>%
-    mutate(genus = str_to_lower(genus),
-           family = str_to_lower(family),
-           order = str_to_lower(order),
-           class = str_to_lower(class),
-           phylum = str_to_lower(phylum),
-           kingdom = str_to_lower(kingdom),
-           eez_iso3c = countries_found)
-  write_parquet(commercial_products, "../data/rgbif_data/commercial_products.parquet")
+  write_parquet(taxa_to_be_filled_gbif, "../data/rgbif_data/taxa_to_be_filled_gbif.parquet")
 }
+
 ```
 
