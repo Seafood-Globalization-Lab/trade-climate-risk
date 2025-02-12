@@ -1,0 +1,251 @@
+---
+title: "Appendix (Extra analyses)"
+author: "Connor Quiroz"
+date: "2025-02-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# CASE STUDY: Look at papua new guinea vs micronesia catch / reporting
+x <- scinames_excluding_tradeflows %>%
+  filter(eez_iso3c == "FSM") %>%
+  mutate(micronesia = 1)
+
+y <- scinames_excluding_tradeflows %>% 
+  filter(eez_iso3c == "PNG") %>%
+  select(sciname_hs_modified) %>%
+  mutate(papua = 1)
+
+papua_all_columns <- scinames_excluding_tradeflows %>% 
+  filter(eez_iso3c == "PNG")
+
+z <- full_join(x, y)
+
+only_in_papua <- z %>%
+  filter(papua == 1, is.na(micronesia))
+
+# only_in_papua <- only_in_papua %>%
+#   select(sciname_hs_modified) %>%
+#   left_join(papua_all_columns)
+
+only_in_micronesia <- z %>%
+  filter(micronesia == 1, is.na(papua))
+
+micro_genus <- only_in_micronesia %>%
+  pull(genus)
+
+micro_subfamily <- only_in_micronesia %>%
+  pull(subfamily)
+
+micro_family <- only_in_micronesia %>%
+  pull(family)
+
+micro_order <- only_in_micronesia %>%
+  pull(order)
+
+micro_class <- only_in_micronesia %>%
+  pull(class)
+
+micro_superclass <- only_in_micronesia %>%
+  pull(superclass)
+
+micro_phylum <- only_in_micronesia %>%
+  pull(phylum)
+
+micro_kingdom <- only_in_micronesia %>%
+  pull(kingdom)
+
+ names_in_both <- only_in_papua %>%
+  filter(sciname_hs_modified %in% micro_genus |
+           sciname_hs_modified %in% micro_subfamily |
+           sciname_hs_modified %in% micro_family |
+           sciname_hs_modified %in% micro_order |
+           sciname_hs_modified %in% micro_class |
+           sciname_hs_modified %in% micro_superclass |
+           sciname_hs_modified %in% micro_phylum |
+           sciname_hs_modified %in% micro_kingdom) %>%
+  select(sciname_hs_modified) %>%
+  left_join(papua_all_columns) %>%
+  select(sciname_hs_modified, common_name, taxa_level) %>%
+   pull(sciname_hs_modified)
+ 
+ x %>%
+  filter(
+    apply(.[, c("genus", "family", "order", "class")], 1, function(row) {
+      # Check if any column contains a match in the list of scientific names
+      any(str_detect(row, paste(names_in_both, collapse = "|")))
+    })
+  ) %>%
+   pull(common_name)
+ 
+x %>%
+  filter(if_any(contains(names_in_both)))
+
+x %>%
+  filter(str_detect(common_name, "tuna"))
+
+papua_all_columns %>%
+  filter(str_detect(common_name, "tuna"))
+
+papua_all_columns %>%
+  filter(str_detect(class, "actinopterygii")) %>%
+  slice(1,6)
+
+
+
+####################
+####################
+####################
+
+# Scenario 1
+taxa_levels <- c("class", "order", "family", "genus", "species")
+scenario_1 <- c()
+for (i in 1:(length(taxa_levels) - 1)) {
+  value <- scinames_excluding_tradeflows %>%
+    mutate(
+      species = case_when(
+        str_count(sciname_hs_modified, " ") == 1 ~ str_split(sciname_hs_modified, " ") %>% 
+          sapply(function(x) x[2]), # Extract second word if exactly two words
+        TRUE ~ NA_character_ # Return NA if not two words
+      )
+    ) %>%
+    filter(eez_iso3c == "FSM") %>%
+    group_by_at(taxa_levels[i]) %>%  # Group by the current taxa level (e.g., class)
+    filter(!is.na(get(taxa_levels[i]))) %>%  # Filter out NA values for the current level
+    summarize(
+      all_next_na = all(!is.na(get(taxa_levels[i + 1]))),  # Check if the next taxa level is NA
+      .groups = "drop"
+    ) %>%
+    summarize(sum = sum(all_next_na)) %>% # Summarize how many rows have all NA for the next taxa level
+    pull(sum)
+  scenario_1 <- append(scenario_1, value)
+}
+
+####################
+####################
+####################
+
+
+# Scenario 2
+
+scenario_2 <- c()
+for (i in 1:(length(taxa_levels) - 1)) {
+  value <- scinames_excluding_tradeflows %>%
+    mutate(
+      species = case_when(
+        str_count(sciname_hs_modified, " ") == 1 ~ str_split(sciname_hs_modified, " ") %>% 
+          sapply(function(x) x[2]), # Extract second word if exactly two words
+        TRUE ~ NA_character_ # Return NA if not two words
+      )
+    ) %>%
+    group_by_at(taxa_levels[i]) %>%  # Group by the current taxa level (e.g., class)
+    filter(!is.na(get(taxa_levels[i]))) %>%  # Filter out NA values for the current level
+    summarize(
+      all_next_na = all(is.na(get(taxa_levels[i + 1]))),  # Check if the next taxa level is NA
+      .groups = "drop"
+    ) %>%
+    summarize(sum = sum(all_next_na)) %>% # Summarize how many rows have all NA for the next taxa level
+    pull(sum)
+  scenario_2 <- append(scenario_2, value)
+}
+
+
+scinames_excluding_tradeflows %>%
+  mutate(
+    species = case_when(
+      str_count(sciname_hs_modified, " ") == 1 ~ str_split(sciname_hs_modified, " ") %>%
+        sapply(function(x) x[2]), # Extract second word if exactly two words
+      TRUE ~ NA_character_ # Return NA if not two words
+    )
+  ) %>%
+  group_by(order) %>%
+  filter(!is.na(order)) %>%
+  summarize(
+    all_genus_na = all(is.na(family)),  # Check if all rows for a class have NA in genus
+    .groups = "drop"
+  ) %>%
+  summarize(sum = sum(all_genus_na))
+
+####################
+####################
+####################
+
+# Scenario 3
+scenario_3 <- c()
+for (i in 1:(length(taxa_levels) - 1)) {
+  value <- scinames_excluding_tradeflows %>%
+    mutate(
+      species = case_when(
+        str_count(sciname_hs_modified, " ") == 1 ~ str_split(sciname_hs_modified, " ") %>% 
+          sapply(function(x) x[2]), # Extract second word if exactly two words
+        TRUE ~ NA_character_ # Return NA if not two words
+      )
+    ) %>%
+    group_by_at(taxa_levels[i]) %>%  # Group by the current taxa level (e.g., class)
+    filter(!is.na(get(taxa_levels[i]))) %>%  # Filter out NA values for the current level
+    summarize(
+      all_next_na = any(is.na(get(taxa_levels[i + 1]))),  # Check if the next taxa level is NA
+      .groups = "drop"
+    ) %>%
+    summarize(sum = sum(all_next_na)) %>% # Summarize how many rows have all NA for the next taxa level
+    pull(sum)
+  scenario_3 <- append(scenario_3, value)
+}
+
+# Correct scenario 3 counts (scenario 3 originally includes stuff from scenario 2, so subtract if 2 > 3)
+for (i in 1:4) {
+  if(scenario_3[i] >= scenario_2[i]) {
+    scenario_3[i] <- scenario_3[i] - scenario_2[i]
+  }
+}
+
+data.frame(missing_taxa = c(scenario_1, scenario_2, scenario_3),
+           scenario = rep(c("1", "2", "3"), each = 4),
+           taxa_level = c("Class", "Order", "Family", "Genus")) %>%
+  ggplot(aes(x = factor(taxa_level, levels = c("Genus", "Family", "Order", "Class")), 
+             y = missing_taxa, 
+             fill = scenario)) +
+  geom_col(position = "fill") +
+  labs(x = "Taxa level", y = "Missing taxa", fill = "Scenario") +
+  theme_light() +
+  scale_fill_viridis_d(end = 0.8)
+
+####################
+####################
+####################
+
+
+
+
+
+
+scinames_excluding_tradeflows
+
+
+
+
+scinames_excluding_tradeflows %>%
+  mutate(
+    species = case_when(
+      str_count(sciname_hs_modified, " ") == 1 ~ str_split(sciname_hs_modified, " ") %>% 
+        sapply(function(x) x[2]), # Extract second word if exactly two words
+      TRUE ~ NA_character_ # Return NA if not two words
+    )
+  ) %>%
+  filter(eez_iso3c == "FSM") %>%
+  group_by(genus) %>%
+  filter(!is.na(genus)) %>%
+  distinct(class)
+
+scinames_excluding_tradeflows %>%
+  filter(eez_iso3c == "FSM") %>%
+  group_by(family) %>%
+  filter(!is.na(family)) %>%
+  distinct(family)
+
+```
+
