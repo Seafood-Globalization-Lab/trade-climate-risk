@@ -497,9 +497,9 @@ consumer_foreign_dependencies <- foreign_consumption_weights %>%
   filter(consumer_iso3c %in% domestic_consumption_weights$consumer_iso3c) %>%
   left_join(domestic_consumption_weights) %>%
   group_by(consumer_iso3c) %>%
-  summarize(trade_dependency = round(foreign_weight /
+  summarize(foreign_dependency = round(foreign_weight /
                                        (foreign_weight +
-                                          domestic_weight), 2))
+                                          domestic_weight), 3))
 
 # Read in taxonomic data
 sciname <- read.csv("../data/sciname.csv")
@@ -629,6 +629,91 @@ length(unique(consumption_sciname$family))
 consumption_sciname %>%
   group_by(eez_iso3c) %>%
   summarize(total_order = length(unique(order)))
+```
+
+```{r add in future climate data}
+# Get current list of scinames in the future climate data
+future_climate_scinames <- unique(df$sciname)
+
+# Group by species and by region so that only species is taken into consideration
+df1 <- df %>%
+  drop_na() %>%
+  group_by(eez_iso3c, sciname) %>%
+  summarize(`2030ssp126` = mean(`2030ssp126`),
+            `2030ssp585` = mean(`2030ssp585`),
+            `2050ssp126` = mean(`2050ssp126`),
+            `2050ssp585` = mean(`2050ssp585`),
+            `2100ssp126` = mean(`2100ssp126`),
+            `2100ssp585` = mean(`2100ssp585`),
+            )
+
+# Filter out consumption data so it only includes the future names
+consumption_future <- consumption %>%
+  filter(sciname_hs_modified %in% future_climate_scinames)
+
+# Join future data on consumption data
+consumption_future <- left_join(consumption_future, df1, by = c("sciname_hs_modified" = "sciname", "eez_iso3c"))
+
+# Pivot dataset to longer to make multiscenario visualization easier
+consumption_future <- consumption_future %>%
+  pivot_longer(cols = c(`2030ssp126`,
+                        `2030ssp585`,
+                        `2050ssp126`,
+                        `2050ssp585`,
+                        `2100ssp126`,
+                        `2100ssp585`), 
+               names_to = "scenario",
+               values_to = "future_change_catch")
+
+#Add in variable later
+consumer_foreign_dependencies
+
+# Get % change in stock composition by country
+consumer_stock_change <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  mutate(weight_future = live_weight_t * future_change_catch,
+         total_weight = sum(weight_future, na.rm = TRUE),
+         change_in_stock = round(weight_future / total_weight, 3)) %>%
+  summarize(change_in_stock = sum(change_in_stock) - 1) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region))
+
+# Safer products
+safer_prospective_products <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  group_by(consumer_iso3c, sciname_hs_modified, scenario) %>%
+  mutate(weight_future = live_weight_t * future_change_catch,
+         total_weight = sum(weight_future, na.rm = TRUE),
+         change_in_stock = round(weight_future / total_weight, 3)) %>%
+  summarize(change_in_stock = sum(change_in_stock)) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  group_by(consumer_iso3c, scenario) %>%
+  top_n(change_in_stock, n = 1) %>%
+  group_by(region, sciname_hs_modified, scenario) %>%
+  count(sciname_hs_modified) %>%
+  filter(!is.na(region))
+
+# Less safe products
+unsafe_prospective_products <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  group_by(consumer_iso3c, sciname_hs_modified, scenario) %>%
+  mutate(weight_future = live_weight_t * future_change_catch,
+         total_weight = sum(weight_future, na.rm = TRUE),
+         change_in_stock = round(weight_future / total_weight, 3)) %>%
+  summarize(change_in_stock = sum(change_in_stock)) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  group_by(consumer_iso3c, scenario) %>%
+  top_n(change_in_stock, n = -1) %>%
+  group_by(region, sciname_hs_modified, scenario) %>%
+  count(sciname_hs_modified) %>%
+  filter(!is.na(region))
 ```
 
 ```{r add in fishbase / sealifebase data connections}

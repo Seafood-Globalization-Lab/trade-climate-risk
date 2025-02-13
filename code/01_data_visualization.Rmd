@@ -233,21 +233,52 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
 
 # Violin plots of consuming countries' trade dependencies
 consumer_foreign_dependencies %>%
+  mutate(foreign_dependency = foreign_dependency * 100) %>%
   exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
   filter(!is.na(region)) %>%
-  ggplot(aes(x = region, y = trade_dependency, fill = region)) +
+  ggplot(aes(x = region, y = foreign_dependency, fill = region)) +
   geom_violin(alpha = 0.5) +
   geom_point() +
-  labs(y = "Proportion foreign dependency") +
+  labs(x = "", y = "% foreign dependency") +
   guides(fill = "none") +
   theme_light() +
-  scale_fill_viridis_d()
+  scale_fill_manual(values = artis_palette(6))
 
+# Foreign dependency of all consumer countries histgoram
 consumer_foreign_dependencies %>%
-  ggplot(aes(x = trade_dependency)) +
+  ggplot(aes(x = foreign_dependency)) +
   geom_histogram(color = "black") +
   labs(x = "Proportion foreign dependency", y = "# consuming conutries") +
   theme_light()
+
+# Consumer stock change graph
+(consumer_stock_change_graph <- consumer_stock_change %>%
+  ggplot(aes(y = region, x  = change_in_stock, fill = region)) +
+  geom_violin(alpha = 0.7) +
+  geom_point() +
+  theme_light() +
+  guides(fill = "none") +
+  labs(y = "", x = "% change in seafood stocks") +
+  scale_fill_manual(values = artis_palette(6)) +
+  facet_wrap(~ scenario))
+
+(safer_prospective_products_graph <- safer_prospective_products %>%
+  ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
+  geom_col(position = "fill") +
+  theme_light() +
+  scale_fill_manual(values = artis_palette(8)) +
+  labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
+  facet_wrap(~ scenario) +
+    theme(axis.text.x= element_text(size = 8)))
+
+(unsafe_prospective_products_graph <- unsafe_prospective_products %>%
+  ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
+  geom_col(position = "fill") +
+  theme_light() +
+  scale_fill_manual(values = artis_palette(8)) +
+  labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
+  facet_wrap(~ scenario)  +
+    theme(axis.text.x= element_text(size = 8)))
   
 # ANOVA testing prop at least species vs region
 leveneTest(prop_at_least_species ~ region, data = con_joined)
@@ -306,6 +337,12 @@ ggsave("../images/prop_absences_linked_unlinked.jpg", plot = prop_absences_linke
 ggsave("../images/prop_map_linked.png", plot = prop_map_linked, device = "jpeg", width = 6, height = 4)
 
 ggsave("../images/prop_map_linked_unlinked.png", plot = prop_map_linked_unlinked, device = "jpeg", width = 6, height = 4)
+
+ggsave("../images/consumer_stock_change_graph.png", plot = consumer_stock_change_graph, device = "jpeg", width = 10, height = 6)
+
+ggsave("../images/safer_prospective_products_graph.png", plot = safer_prospective_products_graph, device = "jpeg", width = 9, height = 5)
+
+ggsave("../images/unsafe_prospective_products_graph.png", plot = unsafe_prospective_products_graph, device = "jpeg", width = 9, height = 5)
 ```
 
 
