@@ -260,8 +260,10 @@ consumer_foreign_dependencies %>%
   guides(fill = "none") +
   labs(y = "", x = "% change in seafood stocks") +
   scale_fill_manual(values = artis_palette(6)) +
-  facet_wrap(~ scenario))
+  facet_wrap(~ scenario)  +
+    xlim(-100, -99))
 
+# Seafood products with increasing trends in catch
 (safer_prospective_products_graph <- safer_prospective_products %>%
   ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
   geom_col(position = "fill") +
@@ -271,6 +273,7 @@ consumer_foreign_dependencies %>%
   facet_wrap(~ scenario) +
     theme(axis.text.x= element_text(size = 8)))
 
+# Seafood products with decreasing trends in catch
 (unsafe_prospective_products_graph <- unsafe_prospective_products %>%
   ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
   geom_col(position = "fill") +
@@ -279,6 +282,42 @@ consumer_foreign_dependencies %>%
   labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
   facet_wrap(~ scenario)  +
     theme(axis.text.x= element_text(size = 8)))
+
+# Mean foreign dependency, by region, by year
+consumer_foreign_dependencies %>%
+  group_by(region, year) %>%
+  summarize(foreign_dependency = mean(foreign_dependency)) %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(x = year, y = foreign_dependency, color = region)) +
+  geom_point() +
+  scale_color_manual(values = artis_palette(6)) + 
+  scale_fill_manual(values = artis_palette(6)) +
+  geom_smooth(aes(fill = region), method = "gam", alpha = 0.2) +
+  theme_light() +
+  labs(x = "", y = "% foreign dependency", color = "Region") +
+  guides(fill = "none") +
+  theme(legend.position="bottom")
+
+consumer_foreign_dependencies %>%
+  filter(consumer_iso3c == "KEN") %>%
+  ggplot(aes(x = year, y = foreign_dependency)) +
+  geom_point()+
+  geom_smooth(method = "gam", alpha = 0.2) +
+  theme_light() +
+  labs(x = "", y = "% foreign dependency") +
+  guides(fill = "none") +
+  theme(legend.position="bottom")
+
+# Boxplot time series of foreign dependency by region
+foreign_dependency_time_series <- consumer_foreign_dependencies %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(x = factor(year), y = foreign_dependency, fill = region)) +  # Convert year to factor to treat as categorical
+  geom_boxplot() +  # Create separate plots for each region
+  scale_fill_manual(values = artis_palette(6)) +  # Apply custom color palette
+  theme_light() +
+  labs(x = "", y = "Foreign Dependency", fill = "Region") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(fill = "none")
   
 # ANOVA testing prop at least species vs region
 leveneTest(prop_at_least_species ~ region, data = con_joined)
@@ -343,6 +382,6 @@ ggsave("../images/consumer_stock_change_graph.png", plot = consumer_stock_change
 ggsave("../images/safer_prospective_products_graph.png", plot = safer_prospective_products_graph, device = "jpeg", width = 9, height = 5)
 
 ggsave("../images/unsafe_prospective_products_graph.png", plot = unsafe_prospective_products_graph, device = "jpeg", width = 9, height = 5)
+
+ggsave("../images/foreign_dependency_time_series.jpg", plot = foreign_dependency_time_series, device = "jpeg", width = 20, height = 2)
 ```
-
-

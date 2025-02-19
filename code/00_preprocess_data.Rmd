@@ -472,22 +472,23 @@ df <- bind_rows(df, df_postprocessed)
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
 consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
-consumption_all_years <- consumption
 consumption <- consumption %>%
   filter(year == 2019)
+
+consumption_all_years <- consumption
 
 
 
 # Calcualte total foreign weight consumption
 domestic_consumption_weights <- consumption %>%
-  group_by(consumer_iso3c) %>%
+  group_by(consumer_iso3c, year) %>%
   filter(consumer_iso3c == producer_iso3c) %>%
   summarize(domestic_weight = sum(live_weight_t)) %>%
   arrange(consumer_iso3c)
 
 # Calculate total foreign weight consumption
 foreign_consumption_weights <- consumption %>%
-  group_by(consumer_iso3c) %>%
+  group_by(consumer_iso3c, year) %>%
   filter(consumer_iso3c != producer_iso3c) %>%
   summarize(foreign_weight = sum(live_weight_t)) %>%
   arrange(consumer_iso3c)
@@ -496,10 +497,11 @@ foreign_consumption_weights <- consumption %>%
 consumer_foreign_dependencies <- foreign_consumption_weights %>%
   filter(consumer_iso3c %in% domestic_consumption_weights$consumer_iso3c) %>%
   left_join(domestic_consumption_weights) %>%
-  group_by(consumer_iso3c) %>%
+  group_by(consumer_iso3c, year) %>%
   summarize(foreign_dependency = round(foreign_weight /
                                        (foreign_weight +
-                                          domestic_weight), 3))
+                                          domestic_weight), 3)) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
 
 # Read in taxonomic data
 sciname <- read.csv("../data/sciname.csv")
@@ -666,10 +668,81 @@ consumption_future <- consumption_future %>%
                values_to = "future_change_catch")
 
 #Add in variable later
-consumer_foreign_dependencies
+# consumer_foreign_dependencies
 
 # Get % change in stock composition by country
 consumer_stock_change <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  summarize(future_weight_t = live_weight_t * future_change_catch,
+            change_in_stock = (future_weight_t / live_weight_t)) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  summarize(change_in_stock = (mean(change_in_stock) - 1) * 100) %>% # convert to percent
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region))
+
+# Scaled by how important is a stock (i.e., % of a country's total weight)
+consumer_stock_change <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(future_weight_t = live_weight_t * future_change_catch,
+            change_in_stock = (future_weight_t / live_weight_t)) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  mutate(total_present_weight = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(pct_influence = live_weight_t / total_present_weight,
+         change_in_stock = pct_influence * 5) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  summarize(change_in_stock = (mean(change_in_stock) - 1) * 100) %>% # convert to percent
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region))
+
+
+# Safer products
+safer_prospective_products <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  mutate(future_change_catch = future_change_catch / 100) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  mutate(weight_future = live_weight_t * future_change_catch,
+         total_weight_future = sum(weight_future),
+         total_live_weight = sum(live_weight_t),
+         change_in_stock = round(total_weight_future / total_live_weight, 3)) %>%
+  slice_max(change_in_stock, n = 1) %>%
+  count(sciname_hs_modified) %>%
+  slice_max(n, n = 1) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  group_by(region, sciname_hs_modified, scenario) %>%
+  count(sciname_hs_modified) %>%
+  filter(!is.na(region))
+
+# Less safe products
+unsafe_prospective_products <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  mutate(future_change_catch = future_change_catch / 100) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  mutate(weight_future = live_weight_t * future_change_catch,
+         total_weight_future = sum(weight_future),
+         total_live_weight = sum(live_weight_t),
+         change_in_stock = round(total_weight_future / total_live_weight, 3)) %>%
+  slice_min(change_in_stock, n = 1) %>%
+  count(sciname_hs_modified) %>%
+  slice_min(n, n = 1) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  group_by(region, sciname_hs_modified, scenario) %>%
+  count(sciname_hs_modified) %>%
+  filter(!is.na(region))
+```
+
+```{r}
+consumption_future %>% 
   filter(consumer_iso3c != producer_iso3c,
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
@@ -681,40 +754,37 @@ consumer_stock_change <- consumption_future %>%
   exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
   filter(!is.na(region))
 
-# Safer products
-safer_prospective_products <- consumption_future %>% 
-  filter(consumer_iso3c != producer_iso3c,
-         !is.na(live_weight_t),
-         !is.na(future_change_catch)) %>%
-  group_by(consumer_iso3c, sciname_hs_modified, scenario) %>%
-  mutate(weight_future = live_weight_t * future_change_catch,
-         total_weight = sum(weight_future, na.rm = TRUE),
-         change_in_stock = round(weight_future / total_weight, 3)) %>%
-  summarize(change_in_stock = sum(change_in_stock)) %>%
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  group_by(consumer_iso3c, scenario) %>%
-  top_n(change_in_stock, n = 1) %>%
-  group_by(region, sciname_hs_modified, scenario) %>%
-  count(sciname_hs_modified) %>%
-  filter(!is.na(region))
 
-# Less safe products
-unsafe_prospective_products <- consumption_future %>% 
+
+consumption_future %>% 
   filter(consumer_iso3c != producer_iso3c,
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
-  group_by(consumer_iso3c, sciname_hs_modified, scenario) %>%
-  mutate(weight_future = live_weight_t * future_change_catch,
-         total_weight = sum(weight_future, na.rm = TRUE),
-         change_in_stock = round(weight_future / total_weight, 3)) %>%
-  summarize(change_in_stock = sum(change_in_stock)) %>%
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  mutate(future_change_catch = future_change_catch / 100) %>%
   group_by(consumer_iso3c, scenario) %>%
-  top_n(change_in_stock, n = -1) %>%
-  group_by(region, sciname_hs_modified, scenario) %>%
-  count(sciname_hs_modified) %>%
-  filter(!is.na(region))
+  mutate(weight_future = live_weight_t * future_change_catch,
+         total_weight_future = sum(weight_future),
+         total_live_weight = sum(live_weight_t),
+         change_in_stock = round(total_weight_future / total_live_weight, 3)) %>%
+  group_by(consumer_iso3c, scenario) %>% 
+  summarize(change_in_stock = mean(change_in_stock) - 1) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region), scenario == "2100ssp585") %>%
+  ggplot(aes(y = region, x  = change_in_stock, fill = region)) +
+  geom_violin(alpha = 0.7) +
+  geom_point() +
+  theme_light() +
+  guides(fill = "none") +
+  labs(y = "", x = "% change in seafood stocks") +
+  scale_fill_manual(values = artis_palette(6)) +
+  facet_wrap(~ scenario)
+
+ungroup() %>%
+  mutate(change_in_stock = (change_in_stock - min(change_in_stock)) / 
+                              (max(change_in_stock) - min(change_in_stock)))
 ```
+
+
 
 ```{r add in fishbase / sealifebase data connections}
 # Create instances of fishbase/sealifebase data (if they don't already exist)
