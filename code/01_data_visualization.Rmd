@@ -253,6 +253,7 @@ consumer_foreign_dependencies %>%
 
 # Consumer stock change graph
 (consumer_stock_change_graph <- consumer_stock_change %>%
+    filter(scenario == "2030ssp126") %>%
   ggplot(aes(y = region, x  = change_in_stock, fill = region)) +
   geom_violin(alpha = 0.7) +
   geom_point() +
@@ -263,25 +264,46 @@ consumer_foreign_dependencies %>%
   facet_wrap(~ scenario)  +
     xlim(-100, -99))
 
+# Define a consistent color mapping for all species
+species_colors <- c(
+  "engraulis anchoita" = "#6A3D9A", 
+  "engraulis encrasicolus" = "#E31A1C", 
+  "engraulis japonicus" = "#FF7F00", 
+  "engraulis ringens" = "#FDBF6F", 
+  "gadus macrocephalus" = "#CAB2D6", 
+  "katsuwonus pelamis" = "#33A02C", 
+  "thunnus albacares" = "#1F78B4"
+)
+
+species_colors <- c(
+  "engraulis anchoita" = "#642233", 
+  "engraulis encrasicolus" = "#8c3d37", 
+  "engraulis japonicus" = "#ab663f", 
+  "engraulis ringens" = "#c29550", 
+  "gadus macrocephalus" = "#c8b366", 
+  "katsuwonus pelamis" = "#93a988", 
+  "thunnus albacares" = "#5d888b"
+)
+
 # Seafood products with increasing trends in catch
 (safer_prospective_products_graph <- safer_prospective_products %>%
   ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
   geom_col(position = "fill") +
   theme_light() +
-  scale_fill_manual(values = artis_palette(8)) +
+  scale_fill_manual(values = species_colors) +  # Use the shared color mapping
   labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
   facet_wrap(~ scenario) +
-    theme(axis.text.x= element_text(size = 8)))
+  theme(axis.text.x= element_text(size = 8)))
 
 # Seafood products with decreasing trends in catch
 (unsafe_prospective_products_graph <- unsafe_prospective_products %>%
   ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
   geom_col(position = "fill") +
   theme_light() +
-  scale_fill_manual(values = artis_palette(8)) +
+  scale_fill_manual(values = species_colors) +  # Use the shared color mapping
   labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
   facet_wrap(~ scenario)  +
-    theme(axis.text.x= element_text(size = 8)))
+  theme(axis.text.x= element_text(size = 8)))
 
 # Mean foreign dependency, by region, by year
 consumer_foreign_dependencies %>%
@@ -351,6 +373,11 @@ t.test(linked_unlinked_props$prop_missing, linked_props$prop_missing, alternativ
 # Testing out normalizing data - potentially might need to regularize if data is not normally distrubted.
 hist((log(con_na_removed$total_weight) - min(log(con_na_removed$total_weight))) / (max(log(con_na_removed$total_weight)) - min(log(con_na_removed$total_weight))))
 countrycode(con_joined$consumer_iso3c, "iso3c", "region")
+
+consumer_stock_change %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+  filter(scenario == "2100ssp126") %>%
+create_map(fill = "change_in_stock")
 ```
 
 > Takeaways: Little correlation between hdi and total weight + shannon diversity, but stronger, positive correlation between weight and shannon diversity (as seen in correlatnion + scatter plots)

@@ -14,6 +14,7 @@ library(ggformula)
 library(countrycode)
 library(data.table)
 library(arrow)
+library(cowplot)
 
 # Map creation
 library(rnaturalearth)
@@ -370,7 +371,7 @@ world_map <- world_map %>%
 ggplot() +
   geom_sf(data = ocean, fill = "#8080ff80") +
   geom_sf(aes(fill = !!sym(fill)), color = "black") + 
-  scale_fill_viridis_c(option = "plasma", trans = "sqrt") +
+  scale_fill_viridis_c(option = "plasma") +
   theme_minimal() +
   theme(legend.position = "bottom") +
   coord_sf(crs = "+proj=robin")
@@ -472,10 +473,11 @@ df <- bind_rows(df, df_postprocessed)
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
 consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
+
+# consumption_all_years <- consumption
+
 consumption <- consumption %>%
   filter(year == 2019)
-
-consumption_all_years <- consumption
 
 
 
@@ -672,52 +674,59 @@ consumption_future <- consumption_future %>%
 
 # Get % change in stock composition by country
 consumer_stock_change <- consumption_future %>% 
-  filter(consumer_iso3c != producer_iso3c,
+  filter(consumer_iso3c != producer_iso3c, # Only include importing countries; drop NAs
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
+  mutate(future_change_catch = case_when( # Convert percentage to proportion
+    future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+    future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
+    future_change_catch == 0 ~ 1)) %>%
   group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
-  summarize(future_weight_t = live_weight_t * future_change_catch,
-            change_in_stock = (future_weight_t / live_weight_t)) %>%
+  mutate(future_weight_t = live_weight_t * future_change_catch, # Calculate future weight
+            change_in_stock = (future_weight_t / live_weight_t)) %>% # Calculate prop in weight change
   group_by(consumer_iso3c, scenario) %>%
-  summarize(change_in_stock = (mean(change_in_stock) - 1) * 100) %>% # convert to percent
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  filter(!is.na(region))
-
-# Scaled by how important is a stock (i.e., % of a country's total weight)
-consumer_stock_change <- consumption_future %>% 
-  filter(consumer_iso3c != producer_iso3c,
-         !is.na(live_weight_t),
-         !is.na(future_change_catch)) %>%
-  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
-  mutate(future_weight_t = live_weight_t * future_change_catch,
-            change_in_stock = (future_weight_t / live_weight_t)) %>%
-  group_by(consumer_iso3c, scenario) %>%
-  mutate(total_present_weight = sum(live_weight_t)) %>%
+  mutate(total_present_weight = sum(live_weight_t)) %>% # Total weight by consuming country / scenario
+  ungroup() %>%
+  mutate(change_in_stock = case_when( # Convert proportion back to percentage
+    change_in_stock > 1 ~ (change_in_stock - 1) * 100,
+    change_in_stock < 1 ~ (1 - change_in_stock) * -100,
+    change_in_stock == 1 ~ 0
+  )) %>%
   group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
   mutate(pct_influence = live_weight_t / total_present_weight,
-         change_in_stock = pct_influence * 5) %>%
+         change_in_stock = pct_influence * change_in_stock) %>% # weight stock changes by % live weight for a conusmer has with respect to their total weight (so not all changes in stocks are treated equally (i.e. one change in stock has a high percent, but a very low recorded weight))
   group_by(consumer_iso3c, scenario) %>%
-  summarize(change_in_stock = (mean(change_in_stock) - 1) * 100) %>% # convert to percent
+  summarize(change_in_stock = sum(change_in_stock)) %>% # Add weighted % stock changes together per consuming county
   exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
   filter(!is.na(region))
-
 
 # Safer products
 safer_prospective_products <- consumption_future %>% 
   filter(consumer_iso3c != producer_iso3c,
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
-  mutate(future_change_catch = future_change_catch / 100) %>%
+  mutate(future_change_catch = case_when(
+    future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+    future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), # Convert percentage to proportion
+    future_change_catch == 0 ~ 1)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(future_weight_t = live_weight_t * future_change_catch,
+            change_in_stock = (future_weight_t / live_weight_t)) %>%
   group_by(consumer_iso3c, scenario) %>%
-  mutate(weight_future = live_weight_t * future_change_catch,
-         total_weight_future = sum(weight_future),
-         total_live_weight = sum(live_weight_t),
-         change_in_stock = round(total_weight_future / total_live_weight, 3)) %>%
+  mutate(total_present_weight = sum(live_weight_t)) %>%
+  ungroup() %>%
+  mutate(change_in_stock = case_when(
+    change_in_stock > 1 ~ (change_in_stock - 1) * 100,
+    change_in_stock < 1 ~ (1 - change_in_stock) * -100,
+    change_in_stock == 1 ~ 0
+  )) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(pct_influence = live_weight_t / total_present_weight,
+         change_in_stock = pct_influence * change_in_stock) %>% # weight stock changes by % live weight for a conusmer has with respect to their total weight (so not all changes in stocks are treated equally (i.e. one change in stock has a high percent, but a very low recorded weight))
+  group_by(consumer_iso3c, scenario) %>%
   slice_max(change_in_stock, n = 1) %>%
-  count(sciname_hs_modified) %>%
-  slice_max(n, n = 1) %>%
   exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  group_by(region, sciname_hs_modified, scenario) %>%
+  group_by(region, scenario) %>%
   count(sciname_hs_modified) %>%
   filter(!is.na(region))
 
@@ -726,64 +735,47 @@ unsafe_prospective_products <- consumption_future %>%
   filter(consumer_iso3c != producer_iso3c,
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
-  mutate(future_change_catch = future_change_catch / 100) %>%
+  mutate(future_change_catch = case_when(
+    future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+    future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), # Convert percentage to proportion
+    future_change_catch == 0 ~ 1)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(future_weight_t = live_weight_t * future_change_catch,
+            change_in_stock = (future_weight_t / live_weight_t)) %>%
   group_by(consumer_iso3c, scenario) %>%
-  mutate(weight_future = live_weight_t * future_change_catch,
-         total_weight_future = sum(weight_future),
-         total_live_weight = sum(live_weight_t),
-         change_in_stock = round(total_weight_future / total_live_weight, 3)) %>%
+  mutate(total_present_weight = sum(live_weight_t)) %>%
+  ungroup() %>%
+  mutate(change_in_stock = case_when(
+    change_in_stock > 1 ~ (change_in_stock - 1) * 100,
+    change_in_stock < 1 ~ (1 - change_in_stock) * -100,
+    change_in_stock == 1 ~ 0
+  )) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(pct_influence = live_weight_t / total_present_weight,
+         change_in_stock = pct_influence * change_in_stock) %>% # weight stock changes by % live weight for a conusmer has with respect to their total weight (so not all changes in stocks are treated equally (i.e. one change in stock has a high percent, but a very low recorded weight))
+  group_by(consumer_iso3c, scenario) %>%
   slice_min(change_in_stock, n = 1) %>%
-  count(sciname_hs_modified) %>%
-  slice_min(n, n = 1) %>%
   exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  group_by(region, sciname_hs_modified, scenario) %>%
+  group_by(region, scenario) %>%
   count(sciname_hs_modified) %>%
   filter(!is.na(region))
 ```
+```{r adaptive capacity data}
+# Read in GDP data
+gdp <- read_csv("../data/adaptive capacity/gdp.csv")
+gdp[,c("Country Code","2019")]
 
-```{r}
-consumption_future %>% 
-  filter(consumer_iso3c != producer_iso3c,
-         !is.na(live_weight_t),
-         !is.na(future_change_catch)) %>%
-  group_by(consumer_iso3c, scenario) %>%
-  mutate(weight_future = live_weight_t * future_change_catch,
-         total_weight = sum(weight_future, na.rm = TRUE),
-         change_in_stock = round(weight_future / total_weight, 3)) %>%
-  summarize(change_in_stock = sum(change_in_stock) - 1) %>%
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  filter(!is.na(region))
+# Get ARTIS consuming countries
+consuming_countries <- consumption %>%
+  filter(consumer_iso3c != producer_iso3c) %>%
+  distinct(consumer_iso3c) %>%
+  mutate(artis = 1)
 
-
-
-consumption_future %>% 
-  filter(consumer_iso3c != producer_iso3c,
-         !is.na(live_weight_t),
-         !is.na(future_change_catch)) %>%
-  mutate(future_change_catch = future_change_catch / 100) %>%
-  group_by(consumer_iso3c, scenario) %>%
-  mutate(weight_future = live_weight_t * future_change_catch,
-         total_weight_future = sum(weight_future),
-         total_live_weight = sum(live_weight_t),
-         change_in_stock = round(total_weight_future / total_live_weight, 3)) %>%
-  group_by(consumer_iso3c, scenario) %>% 
-  summarize(change_in_stock = mean(change_in_stock) - 1) %>%
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  filter(!is.na(region), scenario == "2100ssp585") %>%
-  ggplot(aes(y = region, x  = change_in_stock, fill = region)) +
-  geom_violin(alpha = 0.7) +
-  geom_point() +
-  theme_light() +
-  guides(fill = "none") +
-  labs(y = "", x = "% change in seafood stocks") +
-  scale_fill_manual(values = artis_palette(6)) +
-  facet_wrap(~ scenario)
-
-ungroup() %>%
-  mutate(change_in_stock = (change_in_stock - min(change_in_stock)) / 
-                              (max(change_in_stock) - min(change_in_stock)))
+# Determine which artis consuming countries are in X adaptive capacity data source
+full_join(consuming_countries, gdp[,c("Country Code","2019")] %>% 
+            mutate(gdp_coverage = 1), by = c("consumer_iso3c" = "Country Code")) %>%
+  filter(is.na(gdp_coverage) & artis == 1)
 ```
-
 
 
 ```{r add in fishbase / sealifebase data connections}
