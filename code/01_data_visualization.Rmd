@@ -320,6 +320,7 @@ consumer_foreign_dependencies %>%
   guides(fill = "none") +
   theme(legend.position="bottom")
 
+# Case study looking at foreign dependency by country
 consumer_foreign_dependencies %>%
   filter(consumer_iso3c == "KEN") %>%
   ggplot(aes(x = year, y = foreign_dependency)) +
@@ -340,6 +341,25 @@ foreign_dependency_time_series <- consumer_foreign_dependencies %>%
   labs(x = "", y = "Foreign Dependency", fill = "Region") + 
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   guides(fill = "none")
+
+
+  
+# Look at data coverage for adaptive capacity
+world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+world_map <- world_map %>%
+  left_join(ac_coverage, by = c("iso_a3" = "consumer_iso3c"))
+  
+  world_map %>%
+ggplot() +
+  geom_sf(data = ocean, fill = "#8080ff80") +
+  geom_sf(aes(fill = factor(artis)), color = "black") + 
+  scale_fill_manual(values = c("#f54242", "#425df5")) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  coord_sf(crs = "+proj=robin") +
+    labs(fill = "ARTIS country covered?")
+  
   
 # ANOVA testing prop at least species vs region
 leveneTest(prop_at_least_species ~ region, data = con_joined)
@@ -373,11 +393,6 @@ t.test(linked_unlinked_props$prop_missing, linked_props$prop_missing, alternativ
 # Testing out normalizing data - potentially might need to regularize if data is not normally distrubted.
 hist((log(con_na_removed$total_weight) - min(log(con_na_removed$total_weight))) / (max(log(con_na_removed$total_weight)) - min(log(con_na_removed$total_weight))))
 countrycode(con_joined$consumer_iso3c, "iso3c", "region")
-
-consumer_stock_change %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-  filter(scenario == "2100ssp126") %>%
-create_map(fill = "change_in_stock")
 ```
 
 > Takeaways: Little correlation between hdi and total weight + shannon diversity, but stronger, positive correlation between weight and shannon diversity (as seen in correlatnion + scatter plots)

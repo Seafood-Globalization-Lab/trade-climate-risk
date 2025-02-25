@@ -760,23 +760,173 @@ unsafe_prospective_products <- consumption_future %>%
   count(sciname_hs_modified) %>%
   filter(!is.na(region))
 ```
-```{r adaptive capacity data}
-# Read in GDP data
-gdp <- read_csv("../data/adaptive capacity/gdp.csv")
-gdp[,c("Country Code","2019")]
-
-# Get ARTIS consuming countries
+```{r process adaptive capacity data}
+# Get ARTIS consuming countries (For identifying data coverage)
 consuming_countries <- consumption %>%
   filter(consumer_iso3c != producer_iso3c) %>%
   distinct(consumer_iso3c) %>%
   mutate(artis = 1)
 
-# Determine which artis consuming countries are in X adaptive capacity data source
-full_join(consuming_countries, gdp[,c("Country Code","2019")] %>% 
-            mutate(gdp_coverage = 1), by = c("consumer_iso3c" = "Country Code")) %>%
+country_coverage <- function(data2, join_by = "") {
+  # Full join ARTIS countries + AC countries
+  data <- full_join(consuming_countries, data2 %>% 
+            mutate(gdp_coverage = 1), 
+            by = c("consumer_iso3c" = join_by)) %>%
   filter(is.na(gdp_coverage) & artis == 1)
-```
+  
+  # Look at which countries are missing
+  missing_countries <- data %>%
+    pull(consumer_iso3c)
+  
+  return(missing_countries)
+}
 
+##########
+# ASSETS #
+##########
+
+# sanitation
+sanitation <- read_csv("../data/adaptive capacity/assets/sanitation.csv")
+
+sanitation_clean <- sanitation %>%
+  filter(Indicator_Code == "SH_STA_BASS_ZS", Time_Period == 2019)
+
+a <- country_coverage(sanitation_clean, join_by = "Geography_Code")
+
+# gdp
+gdp <- read_csv("../data/adaptive capacity/assets/gdp.csv")
+
+gdp_clean <- gdp %>%
+  select(`Country Code`, `2019`) %>%
+  filter(!is.na(`2019`))
+
+b <- country_coverage(gdp_clean, join_by = "Country Code")
+
+# trade standardized by gdp
+trade_gdp <- read_csv("../data/adaptive capacity/assets/trade_gdp.csv")
+
+trade_gdp_clean <- trade_gdp %>%
+  filter(`Indicator Code` == "NE.TRD.GNFS.ZS") %>%
+  select(`Country Code`,`2019`) %>%
+  filter(!is.na(`2019`))
+
+c <- country_coverage(trade_gdp_clean, join_by = "Country Code")
+
+
+
+###############
+# FLEXIBILITY #
+###############
+
+# life expectancy
+life_expectancy <- read_csv("../data/adaptive capacity/flexibility/life_expectancy_at_birth.csv")
+
+life_expectancy_clean <- life_expectancy %>%
+  filter(`Indicator Code` == "SP.DYN.LE00.IN") %>%
+  select(`Country Code`,`2019`) %>%
+  filter(!is.na(`2019`))
+
+d <- country_coverage(life_expectancy_clean, join_by = "Country Code")
+
+# supermarkets per 100000
+supermarkets <- read_csv("../data/adaptive capacity/flexibility/supermarkets_per_100000.csv")
+
+supermarkets_clean <- supermarkets %>%
+  mutate(iso3c = countrycode(Region, origin = 'country.name', destination = 'iso3c')) %>%
+  select(iso3c, `2019`) %>%
+  filter(!is.na(2019))
+
+e <- country_coverage(supermarkets_clean, join_by = "iso3c")
+
+# prop labor force
+total_labor_force <- read_csv("../data/adaptive capacity/flexibility/total_labor_force.csv")
+total_population <- read_csv("../data/adaptive capacity/flexibility/total_population.csv")
+
+total_population_clean <- total_population %>%
+  select(`Country Code`, `2019`) %>%
+  rename(total_pop_2019 = "2019")
+
+prop_population_clean <- left_join(total_labor_force, total_population_clean, by = "Country Code") %>%
+  select(`Country Code`, `2019`, total_pop_2019) %>%
+  mutate(prop_labor = `2019` / total_pop_2019) %>%
+  filter(!is.na(prop_labor))
+
+f <- country_coverage(prop_population_clean, join_by = "Country Code")
+
+
+
+############
+# LEARNING #
+############
+
+# mean years schooling data
+mean_years_schooling <- read_csv("../data/adaptive capacity/learning/mean_years_schooling.csv")
+
+mean_years_schooling_clean <- mean_years_schooling %>%
+  filter(Year == 2015) %>%
+  filter(!is.na(avg_years_education_15_to_64))
+
+g <- country_coverage(mean_years_schooling_clean, join_by = "Code")
+
+# scientific robustness
+mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+
+scientific_robustness_clean <- mora_etal_data %>%
+  filter(COMPONENT == "scientific-robustness") %>%
+  filter(!is.na(VALUE))
+
+h <- country_coverage(scientific_robustness_clean, join_by = "ISO3166")
+
+#######################
+# SOCIAL ORGANIZATION #
+#######################
+
+# government effectiveness
+government_effectiveness <- read_csv("../data/adaptive capacity/social organization/government_effectiveness_percentile.csv")
+
+government_effectiveness_clean <- government_effectiveness %>%
+  filter(`Indicator ID` == "WB.WWGI.GE.PER.RNK") %>%
+  select(`Economy ISO3`,`2019`) %>%
+  filter(!is.na(`2019`))
+
+i <- country_coverage(government_effectiveness_clean, join_by = "Economy ISO3")
+
+# policy transparency
+mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+
+policy_transparency_clean <- mora_etal_data %>%
+  filter(COMPONENT == "policy-transparency") %>%
+  filter(!is.na(VALUE))
+
+j <- country_coverage(policy_transparency_clean, join_by = "ISO3166")
+
+# capability to implement regulations
+mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+
+implementation_capability_clean <- mora_etal_data %>%
+  filter(COMPONENT == "implementation-capability") %>%
+  filter(!is.na(VALUE))
+
+k <- country_coverage(implementation_capability_clean, join_by = "ISO3166")
+
+# reliance on subsidies
+mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+
+subsidies_clean <- mora_etal_data %>%
+  filter(COMPONENT == "subsidies") %>%
+  filter(!is.na(VALUE))
+
+l <- country_coverage(subsidies_clean, join_by = "ISO3166")
+
+# Count total number of ARTIS countries missing across adaptive capacity sources
+length(unique(c(a,b,c,d,e,f,g,h,i,j,k,l)))
+missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,g,h,i,j,k,l))
+
+# Show which artis countries are covered by artis / which are not
+ac_coverage <- bind_rows(consuming_countries %>%
+  filter(!consumer_iso3c %in% missing_artis_ac_countries), 
+  data.frame(consumer_iso3c = missing_artis_ac_countries, artis = 0))
+```
 
 ```{r add in fishbase / sealifebase data connections}
 # Create instances of fishbase/sealifebase data (if they don't already exist)
