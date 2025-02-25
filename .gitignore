@@ -40,6 +40,9 @@ renv/cache/
 # rendered analysis html - can change later if needed
 *.html
 
-# Ignore everything in the "data" directory
+# Ignore everything in the "data" and "images" directory
 /data/*
 !/data/.gitkeep
+
+/images/*
+!/images/.gitkeep
