@@ -353,12 +353,12 @@ world_map <- world_map %>%
   world_map %>%
 ggplot() +
   geom_sf(data = ocean, fill = "#8080ff80") +
-  geom_sf(aes(fill = factor(artis)), color = "black") + 
-  scale_fill_manual(values = c("#f54242", "#425df5")) +
+  geom_sf(aes(fill = factor(artis)), color = "black") +
   theme_minimal() +
   theme(legend.position = "bottom") +
   coord_sf(crs = "+proj=robin") +
-    labs(fill = "ARTIS country covered?")
+  labs(fill = "# AC datasets ARTIS\nconsuming country\nis missing from") +
+    scale_fill_brewer(palette = "Reds", na.value = "gray")
   
   
 # ANOVA testing prop at least species vs region

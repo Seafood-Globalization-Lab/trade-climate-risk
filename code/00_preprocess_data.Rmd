@@ -15,6 +15,7 @@ library(countrycode)
 library(data.table)
 library(arrow)
 library(cowplot)
+library(RColorBrewer)
 
 # Map creation
 library(rnaturalearth)
@@ -760,12 +761,13 @@ unsafe_prospective_products <- consumption_future %>%
   count(sciname_hs_modified) %>%
   filter(!is.na(region))
 ```
+
 ```{r process adaptive capacity data}
 # Get ARTIS consuming countries (For identifying data coverage)
 consuming_countries <- consumption %>%
   filter(consumer_iso3c != producer_iso3c) %>%
   distinct(consumer_iso3c) %>%
-  mutate(artis = 1)
+  mutate(artis = 0)
 
 country_coverage <- function(data2, join_by = "") {
   # Full join ARTIS countries + AC countries
@@ -922,10 +924,14 @@ l <- country_coverage(subsidies_clean, join_by = "ISO3166")
 length(unique(c(a,b,c,d,e,f,g,h,i,j,k,l)))
 missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,g,h,i,j,k,l))
 
+missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,g,h,i,j,k,l)) %>%
+  count(consumer_iso3c) %>%
+  rename(artis = "n")
+
 # Show which artis countries are covered by artis / which are not
 ac_coverage <- bind_rows(consuming_countries %>%
   filter(!consumer_iso3c %in% missing_artis_ac_countries), 
-  data.frame(consumer_iso3c = missing_artis_ac_countries, artis = 0))
+  missing_artis_ac_countries)
 ```
 
 ```{r add in fishbase / sealifebase data connections}
