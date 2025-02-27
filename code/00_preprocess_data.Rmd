@@ -480,32 +480,6 @@ consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet"
 consumption <- consumption %>%
   filter(year == 2019)
 
-
-
-# Calcualte total foreign weight consumption
-domestic_consumption_weights <- consumption %>%
-  group_by(consumer_iso3c, year) %>%
-  filter(consumer_iso3c == producer_iso3c) %>%
-  summarize(domestic_weight = sum(live_weight_t)) %>%
-  arrange(consumer_iso3c)
-
-# Calculate total foreign weight consumption
-foreign_consumption_weights <- consumption %>%
-  group_by(consumer_iso3c, year) %>%
-  filter(consumer_iso3c != producer_iso3c) %>%
-  summarize(foreign_weight = sum(live_weight_t)) %>%
-  arrange(consumer_iso3c)
-
-# Calculate trade dependency
-consumer_foreign_dependencies <- foreign_consumption_weights %>%
-  filter(consumer_iso3c %in% domestic_consumption_weights$consumer_iso3c) %>%
-  left_join(domestic_consumption_weights) %>%
-  group_by(consumer_iso3c, year) %>%
-  summarize(foreign_dependency = round(foreign_weight /
-                                       (foreign_weight +
-                                          domestic_weight), 3)) %>%
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
-
 # Read in taxonomic data
 sciname <- read.csv("../data/sciname.csv")
 
@@ -762,12 +736,148 @@ unsafe_prospective_products <- consumption_future %>%
   filter(!is.na(region))
 ```
 
+```{r add in sensitivity data}
+# Calcualte total foreign weight consumption
+domestic_consumption_weights <- consumption %>%
+  group_by(consumer_iso3c, year) %>%
+  filter(consumer_iso3c == producer_iso3c) %>%
+  summarize(domestic_weight = sum(live_weight_t)) %>%
+  arrange(consumer_iso3c)
+
+# Calculate total foreign weight consumption
+foreign_consumption_weights <- consumption %>%
+  group_by(consumer_iso3c, year) %>%
+  filter(consumer_iso3c != producer_iso3c) %>%
+  summarize(foreign_weight = sum(live_weight_t)) %>%
+  arrange(consumer_iso3c)
+
+# Calculate trade dependency
+consumer_foreign_dependencies <- foreign_consumption_weights %>%
+  filter(consumer_iso3c %in% domestic_consumption_weights$consumer_iso3c) %>%
+  left_join(domestic_consumption_weights) %>%
+  group_by(consumer_iso3c, year) %>%
+  summarize(foreign_dependency = round(foreign_weight /
+                                       (foreign_weight +
+                                          domestic_weight), 3)) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
+
+
+# Find greatest / least changes in foreign dependency
+# Largest increase = ISL; largest decrease = NZL
+consumer_foreign_dependencies %>%
+  # Filter to get only rows for 1996 and 2019
+  filter(year %in% c(1996, 2019)) %>%
+  # Spread data so that each year gets its own column
+  pivot_wider(names_from = year, values_from = foreign_dependency) %>%
+  # Calculate the difference between 1996 and 2019
+  mutate(diff_2019_1996 = `2019` - `1996`) %>%
+  # Select columns as needed
+  select(consumer_iso3c, diff_2019_1996) %>%
+  arrange(-diff_2019_1996)
+
+# Read in FAO consumer data
+fao_food <- read_csv("../data/sensitivity/FAOSTAT_data_en_2-26-2025.csv")
+fao_food <- fao_food %>%
+   mutate(iso3c = countrycode(Area, origin = 'country.name', destination = 'iso3c'))
+
+
+# Obtain marine foods
+marine_foods <- fao_food %>%
+  filter(Year == 2019) %>%
+  distinct(Item) %>%
+  slice(13:23) %>%
+  pull(Item)
+
+# Calculate countries' total animal sourced imports
+aquatic_animal_imports <- fao_food %>% filter(Element == "Protein supply quantity (t)",
+                    Item %in% marine_foods) %>%
+  group_by(iso3c, Year) %>%
+  summarize(total_aquatic_animal_imports_t = sum(Value) * 1000)
+
+# Calculate countries' total non-animal sourced import supply
+total_imports <- fao_food %>% filter(Element == "Protein supply quantity (t)",
+                    !Item %in% marine_foods) %>%
+  group_by(Year, iso3c) %>%
+  summarize(total_imports_t = sum(Value))
+
+# Calculate proportion of countries imports that are aquatic animal proteins
+fao_prop_imports <- left_join(aquatic_animal_imports, total_imports, by = c("iso3c", "Year")) %>%
+  group_by(iso3c, Year) %>%
+  summarize(prop_imports_aquatic_animal = round(total_aquatic_animal_imports_t / (total_imports_t + total_aquatic_animal_imports_t), 3)) %>% 
+  exploreARTIS::add_region("iso3c", region.col.name = "region")
+
+# Read in full consumtpiton data (not just marine capture)
+consumption_full <- read_csv("../data/full consumption/consumption/consumption_midpoint_HS96_2019.csv")
+
+# Create a list of years for which you have files
+years <- 2010:2019
+consumption_full <- data.frame()
+
+# Use a loop to read the files and bind them together
+consumption_data <- for (i in years) {
+  # Generate the filename
+  file_name <- paste0("../data/full consumption/consumption/consumption_midpoint_HS96_", as.character(i), ".csv")
+  # Read the CSV file
+  yearly_data <- read_csv(file_name)
+  consumption_full <- bind_rows(consumption_full, yearly_data)
+}
+
+# Calculate proportion of consumed materials from different habitats and methods
+habitat_method_props <- consumption_full %>%
+  group_by(year, consumer_iso3c, habitat, method) %>%
+  summarize(total_group_catch = sum(consumption_live_t)) %>%
+  filter(!habitat == "unknown" | 
+         !method == "unknown") %>%
+  group_by(year, consumer_iso3c) %>%
+  mutate(total_catch = sum(total_group_catch)) %>%
+  group_by(year, consumer_iso3c, habitat, method) %>%
+  summarize(prop_catch = round(total_group_catch / total_catch, 3)) %>%
+  ungroup()
+
+# Join artis and fao food balance sheet data (combines habitat/method props to prop animal protein imports byt fao)
+artis_fao_fbb <- left_join(habitat_method_props, fao_prop_imports, by = c("consumer_iso3c" = "iso3c", "year" = "Year"))
+
+# How important is marine capture on countries' animal sourced protein supply?
+supply_importance <- artis_fao_fbb %>%
+  filter(habitat == "marine",
+         method == "capture", .keep_all = TRUE) %>%
+  group_by(year, consumer_iso3c) %>%
+  mutate(importance_on_supply = prop_catch * prop_imports_aquatic_animal) %>%
+  filter(!is.na(region))
+
+# Visualziation for importance on supply
+supply_importance %>%
+  filter(year == 2019) %>%
+  mutate(importance_on_supply = importance_on_supply * 100) %>%
+  ggplot(aes(x = region, y = importance_on_supply, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  theme_minimal_hgrid() +
+  scale_fill_manual(values = artis_palette(6)) +
+  guides(fill = "none") +
+  labs(y = "% importance of marine capture taxa\non overall protein supply",
+       caption = "0 = No importance, 1 = 100% importance on protein supply")
+
+supply_importance %>%
+  group_by(year, region) %>%
+  summarize(mean_importance = mean(importance_on_supply)) %>%
+  mutate(year = as.Date(paste0(year, "-01-01")),
+         mean_importance = mean_importance * 100) %>%
+  ggplot(aes(x = year, y = mean_importance, color = region)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal_hgrid() +
+  scale_color_manual(values = artis_palette(6)) +
+  labs(color = "Region", y = "% mean importance")
+```
+
+
 ```{r process adaptive capacity data}
 # Get ARTIS consuming countries (For identifying data coverage)
 consuming_countries <- consumption %>%
   filter(consumer_iso3c != producer_iso3c) %>%
   distinct(consumer_iso3c) %>%
-  mutate(artis = 0)
+  mutate(artis = 1)
 
 country_coverage <- function(data2, join_by = "") {
   # Full join ARTIS countries + AC countries
@@ -926,12 +1036,22 @@ missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,g,h,i,j,k,l))
 
 missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,g,h,i,j,k,l)) %>%
   count(consumer_iso3c) %>%
-  rename(artis = "n")
+  rename(artis = "n") %>%
+  filter(consumer_iso3c != "NEI")
 
 # Show which artis countries are covered by artis / which are not
 ac_coverage <- bind_rows(consuming_countries %>%
-  filter(!consumer_iso3c %in% missing_artis_ac_countries), 
-  missing_artis_ac_countries)
+                           mutate(artis = 0) %>%
+                           filter(!consumer_iso3c %in% missing_artis_ac_countries), 
+                         missing_artis_ac_countries)
+
+ac_coverage %>%
+  mutate(artis = as.numeric(artis)) %>%
+  ggplot(aes(x = artis)) +
+  geom_histogram(boundary = 0, binwidth = 1, color = "black") +
+  theme_cowplot(15) +
+  labs(x = "# AC datasets ARTIS\nconsuming country\nis missing from",
+       y = "# countries")
 ```
 
 ```{r add in fishbase / sealifebase data connections}

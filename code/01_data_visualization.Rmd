@@ -342,7 +342,14 @@ foreign_dependency_time_series <- consumer_foreign_dependencies %>%
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   guides(fill = "none")
 
-
+consumer_foreign_dependencies %>%
+  filter(consumer_iso3c == "VCT") %>%
+  mutate(foreign_dependency = 100 * foreign_dependency) %>%
+  ggplot(aes(x = year, y = foreign_dependency)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal_hgrid() +
+  labs(x = "", y = "% foreign dependency")
   
 # Look at data coverage for adaptive capacity
 world_map <- ne_countries(scale = "medium", returnclass = "sf")
