@@ -835,46 +835,103 @@ consumer_foreign_dependencies %>%
   select(consumer_iso3c, diff_2019_1996) %>%
   arrange(-diff_2019_1996)
 
+# Look at average change in foreign dependency from 2015-2019
+foreign_dependency_slopes <- consumer_foreign_dependencies %>%
+  filter(year >= 2015) %>%
+  split(.$consumer_iso3c) %>% 
+  map(~lm(foreign_dependency~year, data = .x)) %>% 
+  map_df(broom::tidy, .id = 'consumer_iso3c') %>%
+  filter(term == 'year') %>%
+  select(consumer_iso3c, "slope" = "estimate") %>%
+  mutate(fill_color = case_when(
+    slope > 0 ~ "1",
+    slope < 0 ~ "0",
+    TRUE ~ NA
+  ))
+
+foreign_dependency_slopes %>%
+  filter(!is.na(fill_color)) %>%
+  ggplot(aes(x = reorder(consumer_iso3c, -slope), 
+             y = slope,
+             fill = fill_color)) +
+  geom_col() +
+  theme_minimal_hgrid() +
+  theme(axis.text.x = element_blank()) +
+  labs(x = "Consuming country", y = "Slope between foreign\ndependency and time", fill = "+/- slope") +
+  scale_fill_manual(values = c("#FF0000", "#0000FF"))
+
+# Get greatest increases --> greatest decreases in fd by eez
+fd_ordered <- foreign_dependency_slopes %>%
+  arrange(-slope) %>%
+  pull(consumer_iso3c)
+
+# Create new directory for foreign dependencies
+if (!dir.exists("../images/foreign dependency ordered/")) {
+  dir.create("../images/foreign dependency ordered/")
+}
+
+for (i in fd_ordered) {
+  
+  # Create image
+  img <- consumer_foreign_dependencies %>%
+    filter(consumer_iso3c == i,
+           year >= 2015) %>%
+    ggplot(aes(x = year, y = foreign_dependency)) +
+    geom_line() +
+    geom_point() +
+    theme_minimal_hgrid() +
+    labs(x = "", y = "Prop foreign dependency", title = i) +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  # Save image
+  ggsave(paste0("../images/foreign dependency ordered/", which(i == fd_ordered), ".jpg"), plot = img, device = "jpeg", height = 4, width = 6, units = "in")
+}
+
+
 # Read in FAO consumer data
-fao_food <- read_csv("../data/sensitivity/FAOSTAT_data_en_2-26-2025.csv")
-fao_food <- fao_food %>%
-   mutate(iso3c = countrycode(Area, origin = 'country.name', destination = 'iso3c'))
+fao_food <- read_csv("../data/FoodBalanceSheets_E_All_Data/FoodBalanceSheets_E_All_Data.csv")
 
+# Convert FAO data to long format
+fao_food_long <- fao_food %>%
+  pivot_longer(cols = c("Y2010", "Y2011", "Y2012", "Y2013", "Y2014", 
+               "Y2015", "Y2016", "Y2017", "Y2018", "Y2019"), names_to = "year") %>%
+  mutate(year = str_replace(year, "Y", ""))
 
-# Obtain marine foods
-marine_foods <- fao_food %>%
-  filter(Year == 2019) %>%
-  distinct(Item) %>%
-  slice(13:23) %>%
-  pull(Item)
+# Extract FAO animal protein totals
+aquatic_animal_proteins <- fao_food_long %>%
+  filter(Element == "Protein supply quantity (t)",
+         Item %in% c("Aquatic Animals, Others", "Cephalopods",
+                     "Crustaceans", "Demersal Fish", "Fish, Seafood",
+                     "Freshwater Fish", "Marine Fish, Other", "Meat, Aquatic Mammals",
+                     "Molluscs, Other"),) %>%
+  mutate(iso3c = countrycode(Area, origin = 'country.name', destination = 'iso3c')) %>%
+  relocate(iso3c, .before = "Area") %>%
+  group_by(iso3c, year) %>%
+  summarize(a_a_protein = sum(value, na.rm = TRUE)) %>%
+  ungroup()
 
-# Calculate countries' total animal sourced imports
-aquatic_animal_imports <- fao_food %>% filter(Element == "Protein supply quantity (t)",
-                    Item %in% marine_foods) %>%
-  group_by(iso3c, Year) %>%
-  summarize(total_aquatic_animal_imports_t = sum(Value) * 1000)
+total_protein <- fao_food_long %>%
+  filter(Element == "Protein supply quantity (t)",
+         Item == "Animal Products") %>%
+  mutate(iso3c = countrycode(Area, origin = 'country.name', destination = 'iso3c')) %>%
+  relocate(iso3c, .before = "Area") %>%
+  group_by(iso3c, year) %>%
+  summarize(t_p = sum(value, na.rm = TRUE)) %>%
+  ungroup()
 
-# Calculate countries' total non-animal sourced import supply
-total_imports <- fao_food %>% filter(Element == "Protein supply quantity (t)",
-                    !Item %in% marine_foods) %>%
-  group_by(Year, iso3c) %>%
-  summarize(total_imports_t = sum(Value))
-
-# Calculate proportion of countries imports that are aquatic animal proteins
-fao_prop_imports <- left_join(aquatic_animal_imports, total_imports, by = c("iso3c", "Year")) %>%
-  group_by(iso3c, Year) %>%
-  summarize(prop_imports_aquatic_animal = round(total_aquatic_animal_imports_t / (total_imports_t + total_aquatic_animal_imports_t), 3)) %>% 
+# Produce proportions aquatic animal protein of total conusmed protein
+fao_prop_imports <- left_join(aquatic_animal_proteins, total_protein) %>%
+  group_by(iso3c, year) %>%
+  summarize(prop_aquatic_animal = a_a_protein / t_p) %>%
+  mutate(year = as.numeric(year)) %>%
   exploreARTIS::add_region("iso3c", region.col.name = "region")
 
-# Read in full consumtpiton data (not just marine capture)
-consumption_full <- read_csv("../data/full consumption/consumption/consumption_midpoint_HS96_2019.csv")
-
-# Create a list of years for which you have files
+# Create a list of years for which you have files (FAO data only goes back to 2010)
 years <- 2010:2019
 consumption_full <- data.frame()
 
 # Use a loop to read the files and bind them together
-consumption_data <- for (i in years) {
+for (i in years) {
   # Generate the filename
   file_name <- paste0("../data/full consumption/consumption/consumption_midpoint_HS96_", as.character(i), ".csv")
   # Read the CSV file
@@ -891,25 +948,25 @@ habitat_method_props <- consumption_full %>%
   group_by(year, consumer_iso3c) %>%
   mutate(total_catch = sum(total_group_catch)) %>%
   group_by(year, consumer_iso3c, habitat, method) %>%
-  summarize(prop_catch = round(total_group_catch / total_catch, 3)) %>%
+  summarize(prop_consumption = total_group_catch / total_catch) %>%
   ungroup()
 
 # Join artis and fao food balance sheet data (combines habitat/method props to prop animal protein imports byt fao)
-artis_fao_fbb <- left_join(habitat_method_props, fao_prop_imports, by = c("consumer_iso3c" = "iso3c", "year" = "Year"))
+artis_fao_fbb <- left_join(habitat_method_props, fao_prop_imports, by = c("consumer_iso3c" = "iso3c", "year"))
 
 # How important is marine capture on countries' animal sourced protein supply?
 supply_importance <- artis_fao_fbb %>%
-  filter(habitat == "marine",
-         method == "capture", .keep_all = TRUE) %>%
   group_by(year, consumer_iso3c) %>%
-  mutate(importance_on_supply = prop_catch * prop_imports_aquatic_animal) %>%
-  filter(!is.na(region))
+  mutate(importance_on_protein_cons = prop_consumption * prop_aquatic_animal) %>%
+  filter(!is.na(region)) %>%
+    filter(habitat == "marine",
+         method == "capture", .keep_all = TRUE)
 
 # Visualziation for importance on supply
 supply_importance %>%
   filter(year == 2019) %>%
-  mutate(importance_on_supply = importance_on_supply * 100) %>%
-  ggplot(aes(x = region, y = importance_on_supply, fill = region)) +
+  mutate(importance_on_protein_cons = importance_on_protein_cons * 100) %>%
+  ggplot(aes(x = region, y = importance_on_protein_cons, fill = region)) +
   geom_violin(alpha = 0.5) +
   geom_point() +
   theme_minimal_hgrid() +
@@ -918,35 +975,49 @@ supply_importance %>%
   labs(y = "% importance of marine capture taxa\non overall protein supply",
        caption = "0 = No importance, 1 = 100% importance on protein supply")
 
-supply_importance %>%
+# Time series of importance over time
+(supply_importance_ts <- supply_importance %>%
   group_by(year, region) %>%
-  summarize(mean_importance = mean(importance_on_supply)) %>%
-  mutate(year = as.Date(paste0(year, "-01-01")),
-         mean_importance = mean_importance * 100) %>%
-  ggplot(aes(x = year, y = mean_importance, color = region)) +
-  geom_point() +
-  geom_line() +
+  mutate(importance_on_protein_cons = importance_on_protein_cons * 100) %>%
+  ggplot(aes(x = factor(year), y = importance_on_protein_cons, fill = region)) +
+  geom_boxplot() +
   theme_minimal_hgrid() +
-  scale_color_manual(values = artis_palette(6)) +
-  labs(color = "Region", y = "% mean importance")
+  scale_fill_manual(values = artis_palette(6)) +
+  labs(color = "Region", y = "% mean importance") +
+  scale_x_discrete(breaks = seq(2010, 2019, by = 1)) +
+  labs(x = "", y = "% importance of marine capture taxa\non overall protein supply"))
 
-left_join(consumption %>%
-  select(-eez_iso3c) %>%
-  distinct(consumer_iso3c),
-  consumption[,c("consumer_iso3c", "hdi", "foreign_dependency")]) %>%
-    distinct(consumer_iso3c, .keep_all = TRUE) %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-  filter(!is.na(foreign_dependency)) %>%
-  create_map(fill = "hdi") +
-  labs(fill = "Human development index")
+# Look specifically at the USA
+artis_fao_fbb %>%
+  group_by(year, consumer_iso3c) %>%
+  mutate(importance_on_protein_cons = prop_consumption * prop_aquatic_animal) %>%
+  filter(!is.na(region)) %>%
+  filter(year == 2019,
+         consumer_iso3c == "USA") %>%
+  ungroup() %>%
+  select(prop_consumption,
+         prop_aquatic_animal,
+         importance_on_protein_cons,
+         habitat,
+         method,
+         -year) %>%
+  mutate(prop_consumption = round(prop_consumption, 3),
+         prop_aquatic_animal = round(prop_aquatic_animal, 3),
+         importance_on_protein_cons = round(importance_on_protein_cons, 3))
 
-consumption %>%
-  filter(consumer_iso3c != producer_iso3c) %>%
-  group_by(consumer_iso3c) %>%
-  summarize(total_consumption = sum(consumption_t)) %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-  create_map(fill = "total_consumption") %>%
-  labs(fill = "Total imports")
+# Time series of overall mean proportion of conusmed protein
+left_join(aquatic_animal_proteins, total_protein) %>%
+  group_by(iso3c, year) %>%
+  summarize(prop_aquatic_animal = a_a_protein / t_p) %>%
+  group_by(year) %>%
+  summarize(overall_prop = mean(prop_aquatic_animal, na.rm = TRUE)) %>%
+  ggplot(aes(x = as.numeric(year), y = overall_prop)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Year") +
+  theme_minimal_hgrid() +
+  labs(y = "Seafood as a proportion of\ntotal consumed protein, globally") +
+   scale_x_continuous(breaks=seq(2010,2019,1))
 ```
 
 
@@ -1058,14 +1129,15 @@ mean_years_schooling_clean <- mean_years_schooling %>%
 
 g <- country_coverage(mean_years_schooling_clean, join_by = "Code")
 
-# scientific robustness
-mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+# Human capital index
+hci <- read_csv("../data/adaptive capacity/learning/HCIData.csv")
 
-scientific_robustness_clean <- mora_etal_data %>%
-  filter(COMPONENT == "scientific-robustness") %>%
-  filter(!is.na(VALUE))
-
-h <- country_coverage(scientific_robustness_clean, join_by = "ISO3166")
+hci_clean <- hci %>%
+  filter(`Indicator Name` == "Human Capital Index (HCI) (scale 0-1)") %>%
+  select(`Country Code`, `2018`) %>%
+  filter(!is.na(`2018`))
+  
+h <- country_coverage(hci_clean, join_by = "Country Code")
 
 #######################
 # SOCIAL ORGANIZATION #
@@ -1081,38 +1153,73 @@ government_effectiveness_clean <- government_effectiveness %>%
 
 i <- country_coverage(government_effectiveness_clean, join_by = "Economy ISO3")
 
-# policy transparency
-mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+# Food safety capacity
+fsc <- read_csv("../data/adaptive capacity/social organization/food-systems-dashboard-2025-03-04.csv")
 
-policy_transparency_clean <- mora_etal_data %>%
-  filter(COMPONENT == "policy-transparency") %>%
-  filter(!is.na(VALUE))
+fsc_clean <- fsc %>%
+  filter(`Start Year` == 2019 | `End Year` == 2019)
 
-j <- country_coverage(policy_transparency_clean, join_by = "ISO3166")
+j <- country_coverage(fsc_clean, join_by = "ISO3")
 
-# capability to implement regulations
-mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
+# Rule of law
+rol <- read_csv("../data/adaptive capacity/social organization/WB-WWGI.csv")
 
-implementation_capability_clean <- mora_etal_data %>%
-  filter(COMPONENT == "implementation-capability") %>%
-  filter(!is.na(VALUE))
+rol_clean <- rol %>% 
+  filter(Indicator == "Rule of Law: Percentile Rank") %>%
+  select(`Economy ISO3`, `Indicator`, `2019`)
 
-k <- country_coverage(implementation_capability_clean, join_by = "ISO3166")
-
-# reliance on subsidies
-mora_etal_data <- read_csv("../data/adaptive capacity/learning/global_srcdata_mora2009.csv")
-
-subsidies_clean <- mora_etal_data %>%
-  filter(COMPONENT == "subsidies") %>%
-  filter(!is.na(VALUE))
-
-l <- country_coverage(subsidies_clean, join_by = "ISO3166")
+k <- country_coverage(rol_clean, join_by = "Economy ISO3")
 
 # Count total number of ARTIS countries missing across adaptive capacity sources
-length(unique(c(a,b,c,d,e,f,g,h,i,j,k,l)))
-missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,g,h,i,j,k,l))
+length(unique(c(a,b,c,d,e,f,g,h,i,j)))
 
-missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,g,h,i,j,k,l)) %>%
+# assign missing countries to vector
+missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,g,h,i,j,k))
+
+# Look at variable coverage across datasets for each country
+variable_coverage <- consuming_countries %>%
+  select(-artis) %>%
+  mutate(a = case_when(consumer_iso3c %in% a ~ 1, TRUE ~ 0),
+         b = case_when(consumer_iso3c %in% b ~ 1, TRUE ~ 0),
+         c = case_when(consumer_iso3c %in% c ~ 1, TRUE ~ 0),
+         d = case_when(consumer_iso3c %in% d ~ 1, TRUE ~ 0),
+         e = case_when(consumer_iso3c %in% e ~ 1, TRUE ~ 0),
+         f = case_when(consumer_iso3c %in% f ~ 1, TRUE ~ 0),
+         g = case_when(consumer_iso3c %in% g ~ 1, TRUE ~ 0),
+         h = case_when(consumer_iso3c %in% h ~ 1, TRUE ~ 0),
+         i = case_when(consumer_iso3c %in% i ~ 1, TRUE ~ 0),
+         j = case_when(consumer_iso3c %in% j ~ 1, TRUE ~ 0),
+         k = case_when(consumer_iso3c %in% k ~ 1, TRUE ~ 0)) %>%
+  pivot_longer(cols = c(a,b,c,d,e,f,g,h,i,j,k)) %>%
+  rename(ac_var_name = "name",
+         present_absent = "value") %>%
+  filter(!str_detect(consumer_iso3c, "NEI")) %>%
+  mutate(ac_var_name = case_when(
+    ac_var_name == "a" ~ "Access to sanitation",
+    ac_var_name == "b" ~ "GDP",
+    ac_var_name == "c" ~ "Prop trade of GDP",
+    ac_var_name == "d" ~ "Life expectancy at birth",
+    ac_var_name == "e" ~ "Supermarkets per 100,000",
+    ac_var_name == "f" ~ "Prop population in labor force",
+    ac_var_name == "g" ~ "Mean years schooling",
+    ac_var_name == "h" ~ "Human capital index",
+    ac_var_name == "i" ~ "Government effectivenes",
+    ac_var_name == "j" ~ "Food safety capacity",
+    ac_var_name == "k" ~ "Rule of law"
+  ))
+
+# Create a heatmap of the variable coverage
+variable_coverage %>%
+  ggplot(aes(y = ac_var_name, x = consumer_iso3c, fill = factor(present_absent))) +
+  geom_tile() +
+  scale_fill_manual(values = c("white", "#FF0000")) +
+  guides(fill = "none") +
+  theme_cowplot() +
+  theme(axis.text.x = element_blank()) +
+  labs(x = "Consuming country", y = "Adaptive capacity variable")
+
+# Get whether an artis country was missing across # of datasets
+missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,g,h,i,j,k)) %>%
   count(consumer_iso3c) %>%
   rename(artis = "n") %>%
   filter(consumer_iso3c != "NEI")
@@ -1125,12 +1232,163 @@ ac_coverage <- bind_rows(consuming_countries %>%
 
 ac_coverage %>%
   mutate(artis = as.numeric(artis)) %>%
+  filter(artis != 0) %>%
   ggplot(aes(x = artis)) +
   geom_histogram(boundary = 0, binwidth = 1, color = "black") +
   theme_cowplot(15) +
   labs(x = "# AC datasets ARTIS\nconsuming country\nis missing from",
        y = "# countries")
+
+# Calculate number of datasets countries are missing from
+variable_coverage %>%
+  group_by(consumer_iso3c) %>%
+  summarize(num_datasets_missing_from = sum(present_absent)) %>%
+  arrange(-num_datasets_missing_from) %>%
+  filter(!str_detect(consumer_iso3c, "NEI")) %>%
+  write.csv("../data/adaptive capacity/ac_coverage.csv")
+
+variable_coverage %>%
+  group_by(ac_var_name) %>%
+  summarize(num_countries_missing = sum(present_absent))
 ```
+
+```{r calculate risk}
+# Prepare AC data so that it can be joined
+
+# Assets
+gdp_clean <- gdp_clean %>%
+  rename(gdp = "2019", consumer_iso3c = "Country Code")
+
+trade_gdp_clean <- trade_gdp_clean %>%
+  rename(gdp_trade = "2019", consumer_iso3c = "Country Code")
+  
+sanitation_clean <- sanitation_clean %>%
+  rename(sanitation = "Value", consumer_iso3c = "Geography_Code") %>%
+  select(sanitation, consumer_iso3c)
+
+
+# Flexibility
+supermarkets_clean <- supermarkets_clean %>%
+  rename(supermarkets = "2019", consumer_iso3c = "iso3c")
+
+life_expectancy_clean <- life_expectancy_clean %>%
+  rename(life_expectancy = "2019", consumer_iso3c = "Country Code")
+
+prop_population_clean <- prop_population_clean %>%
+  rename(consumer_iso3c = "Country Code") %>%
+  select(consumer_iso3c, prop_labor)
+
+# Learning
+mean_years_schooling_clean <- mean_years_schooling_clean %>%
+  rename(avg_yrs_educ = "avg_years_education_15_to_64", consumer_iso3c = "Code") %>%
+select(consumer_iso3c, avg_yrs_educ)
+
+hci_clean <- hci_clean %>%
+  rename(hci = "2018", consumer_iso3c = "Country Code")
+
+
+# Social organization
+government_effectiveness_clean <- government_effectiveness_clean %>%
+  rename(gov_effectiveness = "2019", consumer_iso3c = "Economy ISO3")
+
+fsc_clean <- fsc_clean %>%
+  rename(fsc = "Value", consumer_iso3c = "ISO3") %>%
+  select(consumer_iso3c, fsc)
+  
+
+rol_clean <- rol_clean %>%
+  rename(rol = "2019", consumer_iso3c = "Economy ISO3") %>%
+  select(consumer_iso3c, rol)
+
+# A LOT OF JOINS
+joined_data <- left_join(gdp_clean, trade_gdp_clean) %>%
+  left_join(sanitation_clean) %>%
+  left_join(supermarkets_clean) %>%
+  left_join(life_expectancy_clean) %>%
+  left_join(prop_population_clean) %>%
+  left_join(mean_years_schooling_clean) %>%
+  left_join(hci_clean) %>%
+  left_join(government_effectiveness_clean) %>%
+  left_join(fsc_clean) %>%
+  left_join(rol_clean) %>%
+  right_join(consumer_stock_change, # Add in exposure data
+             filter(year == 2019) %>%
+               select(consumer_iso3c, scenario, change_in_stock), by = "consumer_iso3c") %>%
+  left_join(supply_importance %>% # Add in fao sensitivity data
+              filter(year == 2019,
+                     habitat == "marine",
+                     method == "capture") %>%
+              ungroup() %>%
+              select(consumer_iso3c, importance_on_protein_cons),
+            by = "consumer_iso3c") %>%
+  left_join(consumer_foreign_dependencies %>% # Add in foreign dependency sensitivity
+              filter(year == 2019) %>%
+              ungroup() %>%
+              select(consumer_iso3c, foreign_dependency),
+            by = "consumer_iso3c")
+
+
+# Calculate adaptive capacity across variables
+adaptive_capacity_calcs <- joined_data %>%
+  mutate(across(c(gdp, gdp_trade, sanitation, 
+                  supermarkets, life_expectancy, prop_labor,
+                  avg_yrs_educ, hci, gov_effectiveness,
+                  fsc, rol), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>% # scale variables using min/max scaling
+  mutate(gdp_scaled = gdp_scaled * (1/3), # Weight each AC variable within AC component (will add to 4 for country if each value is it's max value)
+         gdp_trade_scaled = gdp_trade_scaled * (1/3),
+         sanitation_scaled = sanitation_scaled * (1/3),
+         supermarkets_scaled = supermarkets_scaled * (1/3),
+         life_expectancy_scaled = life_expectancy_scaled * (1/3),
+         prop_labor_scaled = prop_labor_scaled * (1/3),
+         avg_yrs_educ_scaled = avg_yrs_educ_scaled * (1/2),
+         hci_scaled = hci * (1/2),
+         gov_effectiveness_scaled = gov_effectiveness_scaled * (1/3),
+         fsc_scaled = fsc_scaled * (1/3),
+         rol_scaled = rol_scaled * (1/3)) %>%
+  distinct(consumer_iso3c, .keep_all = TRUE) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(adaptive_capacity = sum(gdp_scaled, gdp_trade_scaled,
+                                 sanitation_scaled, supermarkets_scaled,
+                                 life_expectancy_scaled,
+                                 prop_labor_scaled,
+                                 avg_yrs_educ_scaled,
+                                 hci_scaled,
+                                 gov_effectiveness_scaled,
+                                 fsc_scaled,
+                                 rol_scaled)) %>%
+  mutate(adaptive_capacity = adaptive_capacity * 0.5) %>% # Divide by two, meaning max value would now = two, which would nullify max level expsorue + sensitivity
+  filter(!is.na(adaptive_capacity)) %>%
+  select(consumer_iso3c, adaptive_capacity)
+
+
+# Calculate vulernability (Risk = Exposure + Risk - Adaptive Capacity)
+risk <- left_join(joined_data, adaptive_capacity_calcs, by = "consumer_iso3c") %>%
+  filter(!is.na(adaptive_capacity),
+         scenario == "2030ssp126") %>%
+  mutate(across(c(change_in_stock, importance_on_protein_cons,
+                  foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(importance_on_protein_cons_scaled = importance_on_protein_cons * 0.5,
+         foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
+         sensitivity = sum(importance_on_protein_cons_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+  filter(!is.na(foreign_dependency_scaled),
+                !is.na(importance_on_protein_cons_scaled)) %>%
+  rename(exposure = "change_in_stock_scaled") %>%
+  select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
+  mutate(adaptive_capacity = adaptive_capacity) %>%
+  mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
+
+# Map vulnerability
+risk %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+create_map(fill = "vulnerability") +
+  labs(fill = "Vulnerability score")
+
+# Look at correlations between vulnerability and E + S + AC
+pairs(risk[,2:5])
+cor(risk[,2:5])
+```
+
 
 ```{r add in fishbase / sealifebase data connections}
 # Create instances of fishbase/sealifebase data (if they don't already exist)

@@ -160,24 +160,6 @@ prop_at_least_taxalevel_versus_hdi <- con_joined %>%
   theme_light() +
   labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (species)", color = "HDI"))
 
-# Future climate projections visualization
-(ssp_projections <- consumption_sciname_future %>%
-  filter(year == 2019 & !is.na(`2100ssp585`)) %>%
-  pivot_longer(c(`2030ssp126`, `2030ssp585`, `2050ssp126`, `2050ssp585`,`2100ssp126`, `2100ssp585`),names_to = "ssp", values_to = "percent_change_catch") %>%
-  mutate(year = as.numeric(map_chr(str_split(ssp, "ssp"), 1)),
-    scenario = map_chr(str_split(ssp, "ssp"), 2)) %>%
-  select(region, year, scenario, percent_change_catch) %>%
-  group_by(region, year, scenario) %>%
-  drop_na() %>%
-  summarize(mean_change = mean(percent_change_catch)) %>%
-  ggplot(aes(x = year, y = mean_change, color = scenario)) +
-  geom_point(size = 1.3) +
-  geom_line(size = 1.1) +
-  facet_wrap(~ region) +
-  scale_color_manual(values = artis_palette(2)) +
-  theme_light() +
-  labs(x = "Year", color = "SSP", y = "Mean change to annual catch potential\n(Aggregated across countries + species)"))
-
 # Props reported by region by taxonomic resolution
 (prop_versus_tax_versus_country <- con_joined %>%
   pivot_longer(cols = c("prop_at_least_species","prop_at_least_genus","prop_at_least_family","prop_at_least_order"), names_to = "level", values_to = "prop") %>%
@@ -342,6 +324,7 @@ foreign_dependency_time_series <- consumer_foreign_dependencies %>%
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   guides(fill = "none")
 
+# look at time series data for 
 consumer_foreign_dependencies %>%
   filter(consumer_iso3c == "VCT") %>%
   mutate(foreign_dependency = 100 * foreign_dependency) %>%
@@ -414,8 +397,6 @@ ggsave("../images/country_diversities.jpg", plot = country_diversities, device =
 
 ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, device = "jpeg", height = 3, width = 5, units = "in")
 
-ggsave("../images/ssp_projections.jpg", plot = ssp_projections, device = "jpeg", height = 3, width = 6, units = "in")
-
 ggsave("../images/prop_versus_tax_versus_country.jpg", plot = prop_versus_tax_versus_country, device = "jpeg", height = 4, width = 9, units = "in")
 
 ggsave("../images/prop_absences_linked.jpg", plot = prop_absences_linked, device = "jpeg", height = 3, width = 5, units = "in")
@@ -433,4 +414,6 @@ ggsave("../images/safer_prospective_products_graph.png", plot = safer_prospectiv
 ggsave("../images/unsafe_prospective_products_graph.png", plot = unsafe_prospective_products_graph, device = "jpeg", width = 9, height = 5)
 
 ggsave("../images/foreign_dependency_time_series.jpg", plot = foreign_dependency_time_series, device = "jpeg", width = 20, height = 2)
+
+ggsave("../images/supply_importance_ts.jpg", plot = supply_importance_ts, device = "jpeg", width = 9, height = 5)
 ```
