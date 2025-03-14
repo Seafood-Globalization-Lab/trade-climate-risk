@@ -75,7 +75,7 @@ pairs(risk[,2:5])
 cor(risk[,2:5])
 ```
 
-```{r run sensitivity analysis on AC variables and componends}
+```{r prepare e/s/ac data for sensitivity analysis}
 e_s_ac_long <- e_s_ac_data %>% # Put e/s/ac data into long format
   mutate(across(c(gdp, gdp_trade, sanitation, 
                   supermarkets, life_expectancy, prop_labor, hci, gov_effectiveness,
@@ -95,14 +95,14 @@ e_s_ac_long <- e_s_ac_data %>% # Put e/s/ac data into long format
                                     c("gov_effectiveness_scaled",
                                                      "fsc_scaled",
                                                      "rol_scaled") ~ "organization"))
+```
 
 
+```{r sensitivity analysis on AC variables within AC components towards risk}
 #number of variables within each component
-
 ac_variables <- e_s_ac_long %>%
   group_by(ac_component) %>%
   distinct(ac_variable)
-
 
 ac_components <- e_s_ac_long %>%
   group_by(ac_component) %>%
@@ -125,8 +125,9 @@ for (i in ac_components$ac_component) {# iterate through each component
   for (j in 1:num_vars) { # Iterate through each variable
     # Reset modifier
     modifier = 0
-    while (pval > 0.05 &
-           (modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))) < 0.90) {
+    pval = 1
+    while (pval >= 0.05 &
+           (modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))) <= 0.90) {
       # Create the concentration vector with the correct number of 50's
       concentration <- rep(50, num_vars)
       concentration[j] <- concentration[j] + modifier
@@ -270,21 +271,50 @@ for (i in ac_components$ac_component) {# iterate through each component
           # print(pval)
           # print(concentration)
     }
-    
-    if ((modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))) > 0.90) {
-      print(paste0("########## Variable: ", ac_variables[ac_variables$ac_component == i,]$ac_variable[j],
-             " is not sensitive to any variable change ##########"))
+    if (j == 1) {
+      cat(sprintf("*** AC VARIABLE COMPONENT: %s ***\n", str_to_upper(i)))
     }
-
+    
+    # Check for variables not sensitive
+    if ((modifier + 50) / ((modifier + 50) + (50 * (num_vars - 1))) > 0.90) {
+      cat(sprintf(
+        "##### Variable: %s is not sensitive #####\n",
+        ac_variables[ac_variables$ac_component == i, ]$ac_variable[j]
+      ))
+      
+      if (j == num_vars) {
+          cat("\n")
+        }
+      
+    }
+    
+    # For sensitive variables
     if (pval < 0.05) {
-      print("---")
-      print(paste0("Variable: ", ac_variables[ac_variables$ac_component == i,]$ac_variable[j],
-             " was sensitive with the following parameters:"))
-      print(paste0("Dirchlet concentration paramters: "))
+      cat("\n")
+      cat(
+        sprintf(
+          "Variable: %s was sensitive with the following parameters:\n",
+          ac_variables[ac_variables$ac_component == i, ]$ac_variable[j]
+        )
+      )
+      
+      # Print Dirichlet concentration parameters
+      cat("Dirichlet concentration parameters:\n")
       print(concentration)
-      print(paste0("Dirchlet proportions:"))
-      print(round(dirichlet_probs,2))
-      print("---")
+      
+      # Print Dirichlet proportions
+      cat("Dirichlet proportions:\n")
+      print(round(dirichlet_probs, 2))
+      
+      cat("\n")
+      if (!(which(i == ac_components$ac_component) == 4 & j == num_vars)) {
+        cat("---\n")
+      }
+      
+      # Add spacing between components if it's the last variable
+      if (j == num_vars) {
+        cat("\n")
+      }
     }
   }
   
@@ -292,37 +322,173 @@ for (i in ac_components$ac_component) {# iterate through each component
 }
 ```
 
-```{r risk code}
+```{r sensitivity analysis on overall component importance towards risk}
+# Set initial loop values
+pval = 1
+modifier = 0
+for (i in ac_components$ac_component) {
+  # iterate through each component
+  # number of variables per adaptive capacity variable
+  # Reset modifier
+  pval = 1
+  modifier = 0
+    while (pval >= 0.05 &
+           (modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))) <= 0.90) {
+  
 
-```
-
-```{r}
-,
+      # Create the concentration vector with the correct number of 50's
+      concentration <- rep(50, 4)
+      concentration[which(ac_components$ac_component == i)] <-
+        concentration[which(ac_components$ac_component == i)] + modifier
+      
+      # Generate 1000 samples from the Dirichlet distribution
+      samples <- rdirichlet(1000, concentration)
+      
+      # Take a random sample from the Dirichlet distribution
+      dirichlet_probs <- samples[sample(1:nrow(samples), 1), ]
+      
+      modifier <- modifier + 5
+      
+      ac_simulated <- e_s_ac_long %>%
+        mutate(value_scaled = case_when(
+          # Assets,
+          (i != "assets" | i == "assets") & 
+          ac_variable == "gdp_scaled" ~ value * 1 / num_asse_vars,
           
-          # flexibility
-          i == "flexilbity" & 
-          ac_variable == "supermarkets_scaled" ~ value * concentration[which(ac_variables[ac_variables$ac_component == i,]$ac_variable == "supermarkets_scaled")],
-          i != "flexilbity" & 
-          ac_variable == "supermarkets_scaled" ~ value * 1 / j,
+          (i != "assets" | i == "assets") & 
+          ac_variable == "gdp_trade_scaled" ~ value * 1 / num_asse_vars,
           
-          i == "flexilbity" & 
-          ac_variable == "life_expectancy_scaled" ~ value * concentration[which(ac_variables[ac_variables$ac_component == i,]$ac_variable == "life_expectancy_scaled")],
-          i != "flexilbity" & 
-          ac_variable == "life_expectancy_scaled" ~ value * 1 / j,
+          (i != "assets" | i == "assets") & 
+          ac_variable == "sanitation_scaled" ~ value * 1 / num_asse_vars,
           
-          i == "flexilbity" & 
-          ac_variable == "prop_labor_scaled" ~ value * concentration[which(ac_variables[ac_variables$ac_component == i,]$ac_variable == "prop_labor_scaled")],
-          i != "flexilbity" & 
-          ac_variable == "prop_labor_scaled" ~ value * 1 / j,
+          # flexibility,
+          (i != "flexilbity" | i == "flexibility") & 
+          ac_variable == "supermarkets_scaled" ~ value * 1 / num_flex_vars,
+          
+          (i != "flexilbity" | i == "flexibility") & 
+          ac_variable == "life_expectancy_scaled" ~ value * 1 / num_flex_vars,
+          
+          (i != "flexilbity" | i == "flexibility") & 
+          ac_variable == "prop_labor_scaled" ~ value * 1 / num_flex_vars,
           
           # learning
-          i == "learning" & 
-          ac_variable == "hci_scaled" ~ value * concentration[which(ac_variables[ac_variables$ac_component == i,]$ac_variable == "hci_scaled")],
-          i != "learning" & 
-          ac_variable == "hci_scaled" ~ value * 1 / j
+          (i != "learning" | i == "learning") & 
+          ac_variable == "hci_scaled" ~ value * 1 / num_learn_vars,
           
           # social organization
+          (i != "organization" | i == "organization") & 
+          ac_variable == "gov_effectiveness_scaled" ~ value * 1 / num_org_vars,
           
+          (i != "organization" | i == "organization") & 
+          ac_variable == "fsc_scaled" ~ value * 1 / num_org_vars,
           
+          (i != "organization" | i == "organization") & 
+          ac_variable == "rol_scaled" ~ value * 1 / num_org_vars),
+          
+          # scale overall components of adaptive capacity
+          value_scaled = case_when(
+            i == "assets" &
+              ac_component == "assets" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == i)],
+            i != "assets" &
+              ac_component == "assets" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == "assets")],
+            
+            i == "flexibility" &
+              ac_component == "flexibility" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == i)],
+            i != "flexibility" &
+              ac_component == "flexibility" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == "flexibility")],
+            
+            i == "learning"  &
+              ac_component == "learning" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == i)],
+            i != "learning" & 
+              ac_component == "learning"~ 
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == "learning")],
+            
+            i == "organization"  &
+              ac_component == "organization" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == i)],
+            i != "organization" & 
+              ac_component == "organization" ~
+              value_scaled * dirichlet_probs[which(ac_components$ac_component == "organization")],)
+      
+      ) %>%
+        filter(scenario == "2030ssp126") %>%
+        group_by(consumer_iso3c) %>%
+        summarize(adaptive_capacity = sum(value_scaled),
+                  adaptive_capacity = adaptive_capacity * 0.5) %>%
+        filter(!is.na(adaptive_capacity))
+      
+            # Calculate simulated vulnerability
+          risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
+          filter(!is.na(adaptive_capacity),
+                 scenario == "2030ssp126") %>%
+          mutate(across(c(change_in_stock, importance_on_protein_cons,
+                          foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
+          group_by(consumer_iso3c) %>%
+          mutate(importance_on_protein_cons_scaled = importance_on_protein_cons * 0.5,
+                 foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
+                 sensitivity = sum(importance_on_protein_cons_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+          filter(!is.na(foreign_dependency_scaled),
+                        !is.na(importance_on_protein_cons_scaled)) %>%
+          rename(exposure = "change_in_stock_scaled") %>%
+          select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
+          mutate(adaptive_capacity = adaptive_capacity) %>%
+          mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
+          
+          t_test <- t.test(risk_simulated$vulnerability, risk$vulnerability)
+          pval <- t_test$p.value
+          # print(pval)
+          # print(concentration)
+    }
+    if (j == 1) {
+      cat(sprintf("*** AC VARIABLE COMPONENT: %s ***\n", str_to_upper(i)))
+    }
+    
+    # Check for variables not sensitive
+    if ((modifier + 50) / ((modifier + 50) + (50 * (num_vars - 1))) > 0.90) {
+      cat(sprintf(
+        "##### Component: %s is not sensitive #####\n",
+        i
+      ))
+      
+      if (j == num_vars) {
+          cat("\n")
+        }
+      
+    }
+    
+    # For sensitive variables
+    if (pval < 0.05) {
+      cat(
+        sprintf(
+          "Component: %s was sensitive with the following parameters:\n",
+          i
+        )
+      )
+      
+      # Print Dirichlet concentration parameters
+      cat("Dirichlet concentration parameters:\n")
+      print(concentration)
+      
+      # Print Dirichlet proportions
+      cat("Dirichlet proportions:\n")
+      print(round(dirichlet_probs, 2))
+      
+      cat("\n")
+      if (!which(i == ac_components$ac_component) == 4) {
+        cat("---\n")
+      }
+      
+      # Add spacing between components if it's the last variable
+      if (j == num_vars) {
+        cat("\n")
+      }
+    }
+  
+  
+}
 ```
-
