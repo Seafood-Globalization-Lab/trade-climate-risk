@@ -288,7 +288,8 @@ foreign_dependency_slopes %>%
   theme_minimal_hgrid() +
   theme(axis.text.x = element_blank()) +
   labs(x = "Consuming country", y = "Slope between foreign\ndependency and time", fill = "Region") +
-  scale_fill_manual(values = artis_palette(7))
+  scale_fill_manual(values = artis_palette(7)) +
+  ylim(-0.05, 0.05)
 
 foreign_dependency_slopes %>%
   filter(!is.na(region)) %>%
