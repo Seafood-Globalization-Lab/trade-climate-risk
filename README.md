@@ -1,4 +1,2 @@
-# R-analysis-template
-Template for R project architecture - streamline new project setup
-
-More how-to details: [https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)
+#trade-climate-risk
+This is a repository for Chapter 2 Connor Quiroz' Ph.D. dissertation identifying the future climate risk embedded in international seafood imports. 
