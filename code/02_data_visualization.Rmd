@@ -235,7 +235,6 @@ consumer_foreign_dependencies %>%
 
 # Consumer stock change graph
 (consumer_stock_change_graph <- consumer_stock_change %>%
-    filter(scenario == "2030ssp126") %>%
   ggplot(aes(y = region, x  = change_in_stock, fill = region)) +
   geom_violin(alpha = 0.7) +
   geom_point() +
@@ -243,8 +242,7 @@ consumer_foreign_dependencies %>%
   guides(fill = "none") +
   labs(y = "", x = "% change in seafood stocks") +
   scale_fill_manual(values = artis_palette(6)) +
-  facet_wrap(~ scenario)  +
-    xlim(-100, -99))
+  facet_wrap(~ scenario))
 
 # Define a consistent color mapping for all species
 species_colors <- c(
@@ -542,8 +540,7 @@ ggplot() +
   
   
   
-consumer_stock_change %>%
-  filter(scenario == "2030ssp126") %>%
+consumer_stock_change  %>%
   ggplot(aes(x = change_in_stock)) +
   # Fill each histogram bar using the x axis category that ggplot creates
   geom_histogram(

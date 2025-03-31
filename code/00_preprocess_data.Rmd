@@ -66,6 +66,64 @@ ggplot() +
 
 # Data Cleaning
 
+```{r new preprocess future climate data}
+file_names <- list.files(path = "../data/exposure/mcp_per_change/mcp_per_change/", pattern = "\\.csv", full.names = TRUE)
+
+# Obtain species lookup key (will be used in loop join)
+species_names <- fread("../data/exposure/dbem_spp_list.csv")
+
+# initiate empty df
+df <- data.frame()
+
+for (i in 1:length(file_names)) {
+  # Read in i'th species file in loop
+  df_i <- fread(file_names[i])
+  
+  df_i <- left_join(df_i, species_names, by = "taxon_key")
+  
+  # Select only certain variables for certain years and pivot wider
+  df_i <- df_i %>%
+    mutate(taxon_name = str_to_lower(taxon_name)) %>%
+    select(taxon_name, eez_name, ssp, per_change) %>%
+    pivot_wider(names_from = ssp, values_from = per_change)
+  
+  # Combine all species observations into one file
+  df <- df %>%
+    bind_rows(df_i)
+}
+
+# Obtain previous state on dataframe (to get unmatched)
+df_preprocessed <- df
+
+# Convert eez variable countries to iso3c codes
+for (i in 1:length(df$eez_name)) {
+  df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
+}
+
+# Rename country variable so it can be joined
+df <- df %>%
+  rename(eez_iso3c = "eez_name",
+         sciname = "taxon_name")
+
+
+
+# # See how many countries were not matches
+sum(is.na(df$eez_iso3c))
+
+# # Number of countries that properly got matched
+length(unique(df$eez_iso3c))
+
+# # Unmatched countries via countrycode
+unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
+
+# # Only keep rows in preprocessed dataset that are unmatched countries
+df_preprocessed <- df_preprocessed %>%
+  filter(eez_name %in% unmatched_countries)
+
+df_preprocessed %>% distinct(eez_name)
+```
+
+
 ```{r preprocess future climatedata}
 # Get list of files for future projections on EACH species
 file_names <- list.files(path = "../data/species/", pattern = "\\.csv", full.names = TRUE)
@@ -111,7 +169,8 @@ for (i in 1:length(df$eez_name)) {
 
 # Rename country variable so it can be joined
 df <- df %>%
-  rename(eez_iso3c = "eez_name")
+  rename(eez_iso3c = "eez_name",
+         sciname = "taxon_name")
 
 # # See how many countries were not matches
 # sum(is.na(df$eez_iso3c))
@@ -168,29 +227,21 @@ future_climate_scinames <- unique(df$sciname)
 df1 <- df %>%
   drop_na() %>%
   group_by(eez_iso3c, sciname) %>%
-  summarize(`2030ssp126` = mean(`2030ssp126`),
-            `2030ssp585` = mean(`2030ssp585`),
-            `2050ssp126` = mean(`2050ssp126`),
-            `2050ssp585` = mean(`2050ssp585`),
-            `2100ssp126` = mean(`2100ssp126`),
-            `2100ssp585` = mean(`2100ssp585`),
-            )
+  summarize(`ssp126` = mean(`ssp126`),
+            `ssp585` = mean(`ssp585`))
 
 # Filter out consumption data so it only includes the future names
 consumption_future <- consumption %>%
-  filter(sciname_hs_modified %in% future_climate_scinames)
+  filter(sciname_hs_modified %in% future_climate_scinames,
+         year == 2019)
 
 # Join future data on consumption data
 consumption_future <- left_join(consumption_future, df1, by = c("sciname_hs_modified" = "sciname", "eez_iso3c"))
 
 # Pivot dataset to longer to make multiscenario visualization easier
 consumption_future <- consumption_future %>%
-  pivot_longer(cols = c(`2030ssp126`,
-                        `2030ssp585`,
-                        `2050ssp126`,
-                        `2050ssp585`,
-                        `2100ssp126`,
-                        `2100ssp585`), 
+  pivot_longer(cols = c(`ssp126`,
+                        `ssp585`), 
                names_to = "scenario",
                values_to = "future_change_catch")
 
@@ -504,11 +555,11 @@ f <- country_coverage(prop_population_clean, join_by = "Country Code")
 ############
 
 # Jessica's data
-avg_education <- read_csv("../data/adaptive capacity/all_national_indicators.csv")
+# avg_education <- read_csv("../data/adaptive capacity/all_national_indicators.csv")
 
 # # mean years schooling data
 # mean_years_schooling <- read_csv("../data/adaptive capacity/learning/mean_years_schooling.csv")
-# 
+# # 
 # mean_years_schooling_clean <- mean_years_schooling %>%
 #   filter(Year == 2015) %>%
 #   filter(!is.na(avg_years_education_15_to_64))
@@ -603,7 +654,7 @@ variable_coverage %>%
   labs(x = "Consuming country", y = "Adaptive capacity variable")
 
 # Get whether an artis country was missing across # of datasets
-missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,g,h,i,j,k)) %>%
+missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,h,i,j,k)) %>%
   count(consumer_iso3c) %>%
   rename(artis = "n") %>%
   filter(consumer_iso3c != "NEI")
@@ -637,23 +688,6 @@ variable_coverage %>%
   arrange(-num_countries_missing)
 ```
 
-```{r}
-avg_education %>%
-  mutate(across(2:3, ~sum(is.na(.))))
-
-x <- consuming_countries %>% pull(consumer_iso3c)
-
-saveRDS(x, "../x.rds")
-avg_education %>%
-  filter(iso3c %in% x) %>%
-  summarise(across(everything(), ~sum(is.na(.)))) %>%
-  select(-c(country_name_en, iso3c, iso3n)) %>%
-  pivot_longer(cols = everything(), names_to = "variable", values_to = "na_count") %>%
-  arrange(-na_count) %>%
-  mutate(192)
-```
-
-
 ```{r calculate risk}
 # Prepare AC data so that it can be joined
 
@@ -681,9 +715,11 @@ prop_population_clean <- prop_population_clean %>%
   select(consumer_iso3c, prop_labor)
 
 # Learning
-mean_years_schooling_clean <- mean_years_schooling_clean %>%
-  rename(avg_yrs_educ = "avg_years_education_15_to_64", consumer_iso3c = "Code") %>%
-select(consumer_iso3c, avg_yrs_educ)
+
+# No longer using mean years schooling
+# mean_years_schooling_clean <- mean_years_schooling_clean %>%
+#   rename(avg_yrs_educ = "avg_years_education_15_to_64", consumer_iso3c = "Code") %>%
+# select(consumer_iso3c, avg_yrs_educ)
 
 hci_clean <- hci_clean %>%
   rename(hci = "2018", consumer_iso3c = "Country Code")
@@ -712,8 +748,7 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(government_effectiveness_clean) %>%
   left_join(fsc_clean) %>%
   left_join(rol_clean) %>%
-  right_join(consumer_stock_change, # Add in exposure data
-             filter(year == 2019) %>%
+  right_join(consumer_stock_change %>% # Add in exposure data
                select(consumer_iso3c, scenario, change_in_stock), by = "consumer_iso3c") %>%
   left_join(supply_importance %>% # Add in fao sensitivity data
               filter(year == 2019,

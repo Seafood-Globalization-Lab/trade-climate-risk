@@ -50,7 +50,7 @@ adaptive_capacity_calcs <- e_s_ac_data %>%
 # Calculate vulernability (Risk = Exposure + Risk - Adaptive Capacity)
 risk <- left_join(e_s_ac_data, adaptive_capacity_calcs, by = "consumer_iso3c") %>%
   filter(!is.na(adaptive_capacity),
-         scenario == "2030ssp126") %>%
+         scenario == "ssp585") %>%
   mutate(across(c(change_in_stock, importance_on_protein_cons,
                   foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
   group_by(consumer_iso3c) %>%
@@ -73,6 +73,13 @@ create_map(fill = "vulnerability") +
 # Look at correlations between vulnerability and E + S + AC
 pairs(risk[,2:5])
 cor(risk[,2:5])
+
+e_s_ac_data %>%
+  ggplot(aes(x = change_in_stock)) +
+  geom_histogram(color = "black") +
+  facet_wrap(~ scenario) +
+  theme_cowplot() +
+  labs(x = "% Change in stock", y = "# countries")
 ```
 
 ```{r prepare e/s/ac data for sensitivity analysis}
@@ -243,7 +250,7 @@ for (i in ac_components$ac_component) {# iterate through each component
           ac_variable == "rol_scaled" ~ value * 1 / num_org_vars)
       
       ) %>%
-        filter(scenario == "2030ssp126") %>%
+        filter(scenario == "ssp126") %>%
         group_by(consumer_iso3c) %>%
         summarize(adaptive_capacity = sum(value_scaled),
                   adaptive_capacity = adaptive_capacity * 0.5) %>%
@@ -252,7 +259,7 @@ for (i in ac_components$ac_component) {# iterate through each component
             # Calculate simulated vulnerability
           risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
           filter(!is.na(adaptive_capacity),
-                 scenario == "2030ssp126") %>%
+                 scenario == "ssp126") %>%
           mutate(across(c(change_in_stock, importance_on_protein_cons,
                           foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
           group_by(consumer_iso3c) %>%
@@ -416,7 +423,7 @@ for (i in ac_components$ac_component) {
               value_scaled * dirichlet_probs[which(ac_components$ac_component == "organization")],)
       
       ) %>%
-        filter(scenario == "2030ssp126") %>%
+        filter(scenario == "ssp126") %>%
         group_by(consumer_iso3c) %>%
         summarize(adaptive_capacity = sum(value_scaled),
                   adaptive_capacity = adaptive_capacity * 0.5) %>%
@@ -425,7 +432,7 @@ for (i in ac_components$ac_component) {
             # Calculate simulated vulnerability
           risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
           filter(!is.na(adaptive_capacity),
-                 scenario == "2030ssp126") %>%
+                 scenario == "ssp126") %>%
           mutate(across(c(change_in_stock, importance_on_protein_cons,
                           foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
           group_by(consumer_iso3c) %>%
