@@ -37,33 +37,6 @@ library(duckdbfs)
 library(rfishbase)
 ```
 
-```{r initialize functions}
-# Ocean polygon
-ocean <- st_polygon(list(cbind(c(seq(-180, 179, len = 100), rep(180, 100), 
-                        seq(179, -180, len = 100), rep(-180, 100)),
-                      c(rep(-90, 100), seq(-89, 89, len = 100),
-                        rep(90, 100), seq(89, -90, len = 100))))) |>
-  st_sfc(crs = "WGS84") |>
-  st_as_sf()
-
-create_map <- function(data, fill = "prop_missing") {
-  world_map <- ne_countries(scale = "medium", returnclass = "sf")
-
-world_map <- world_map %>%
-  left_join(data, by = c("iso_a3" = "eez_iso3c"))
-  
-  world_map %>%
-ggplot() +
-  geom_sf(data = ocean, fill = "#8080ff80") +
-  geom_sf(aes(fill = !!sym(fill)), color = "black") + 
-  scale_fill_viridis_c(option = "plasma") +
-  theme_minimal() +
-  theme(legend.position = "bottom") +
-  coord_sf(crs = "+proj=robin")
-}
-```
-
-
 # Data Cleaning
 
 ```{r new preprocess future climate data}
@@ -105,7 +78,8 @@ df <- df %>%
   rename(eez_iso3c = "eez_name",
          sciname = "taxon_name")
 
-
+# Write joined future cimate data to .csv
+write_csv(df, "../output/future_climate_joined.csv")
 
 # # See how many countries were not matches
 sum(is.na(df$eez_iso3c))
@@ -120,73 +94,9 @@ unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3
 df_preprocessed <- df_preprocessed %>%
   filter(eez_name %in% unmatched_countries)
 
+# Territories that were not matched via countrycode (Tokelau & Svalbard Isl.)
 df_preprocessed %>% distinct(eez_name)
-```
 
-
-```{r preprocess future climatedata}
-# Get list of files for future projections on EACH species
-file_names <- list.files(path = "../data/species/", pattern = "\\.csv", full.names = TRUE)
-
-# Obtain species lookup key (will be used in loop join)
-species_names <- fread("../data/dbem_spp_list.csv")
-
-# Read in eez lat long extents (use to identify eez territories by species distribution in fishbase)
-eez_extents <- fread("../data/eez_lat_long_extents.csv")
-
-# initiate empty df
-df <- data.frame()
-
-for (i in 1:length(file_names)) {
-  # Read in i'th species file in loop
-  df_i <- fread(file_names[i])
-  
-  # rename species variable to taxon_key to a join can work
-  df_i <- df_i %>%
-    rename(taxon_key = "species")
-  
-  df_i <- left_join(df_i, species_names, by = "taxon_key")
-  
-  # Select only certain variables for certain years and pivot wider
-  df_i <- df_i %>%
-    filter(year %in% c(2030, 2050, 2100)) %>%
-    mutate(year_ssp = paste0(year, ssp), sciname = str_to_lower(paste(genus, species))) %>%
-    select(sciname, eez_name, year_ssp, mean_per_change) %>%
-    pivot_wider(names_from = year_ssp, values_from = mean_per_change)
-  
-  # Combine all species observations into one file
-  df <- df %>%
-    bind_rows(df_i)
-}
-
-# Obtain previous state on dataframe (to get unmatched)
-df_preprocessed <- df
-
-# Convert eez variable countries to iso3c codes
-for (i in 1:length(df$eez_name)) {
-  df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
-}
-
-# Rename country variable so it can be joined
-df <- df %>%
-  rename(eez_iso3c = "eez_name",
-         sciname = "taxon_name")
-
-# # See how many countries were not matches
-# sum(is.na(df$eez_iso3c))
-# 
-# # Number of countries that properly got matched
-# length(unique(df$eez_iso3c))
-# 
-# # Unmatched countries via countrycode
-# unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
-# 
-# # Only keep rows in preprocessed dataset that are unmatched countries
-# df_preprocessed <- df_preprocessed %>%
-#   filter(eez_name %in% unmatched_countries)
-# 
-# df_postprocessed <- df_preprocessed
-# 
 # # Get country names out of parenthesis with string detects
 # for (i in seq_along(df_preprocessed$eez_name)) {
 #   
@@ -220,6 +130,9 @@ consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet"
 ```
 
 ```{r exposure (add in future climate data)}
+# Read in future climate data
+df <- read_csv("../output/future_climate_joined.csv")
+
 # Get current list of scinames in the future climate data
 future_climate_scinames <- unique(df$sciname)
 
@@ -249,7 +162,7 @@ consumption_future <- consumption_future %>%
 # consumer_foreign_dependencies
 
 # Get % change in stock composition by country
-consumer_stock_change <- consumption_future %>% 
+consumer_stock_change_pre <- consumption_future %>% 
   filter(consumer_iso3c != producer_iso3c, # Only include importing countries; drop NAs
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
@@ -257,201 +170,30 @@ consumer_stock_change <- consumption_future %>%
     future_change_catch > 0 ~ (future_change_catch / 100) + 1,
     future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
     future_change_catch == 0 ~ 1)) %>%
-  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
-  mutate(future_weight_t = live_weight_t * future_change_catch, # Calculate future weight
-            change_in_stock = (future_weight_t / live_weight_t)) %>% # Calculate prop in weight change
+  # group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch)
+  
+# Use future weights to calculate % change in weight by country
+consumer_stock_change <- consumer_stock_change_pre %>% 
   group_by(consumer_iso3c, scenario) %>%
-  mutate(total_present_weight = sum(live_weight_t)) %>% # Total weight by consuming country / scenario
-  ungroup() %>%
-  mutate(change_in_stock = case_when( # Convert proportion back to percentage
-    change_in_stock > 1 ~ (change_in_stock - 1) * 100,
-    change_in_stock < 1 ~ (1 - change_in_stock) * -100,
-    change_in_stock == 1 ~ 0
-  )) %>%
-  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
-  mutate(pct_influence = live_weight_t / total_present_weight,
-         change_in_stock = pct_influence * change_in_stock) %>% # weight stock changes by % live weight for a conusmer has with respect to their total weight (so not all changes in stocks are treated equally (i.e. one change in stock has a high percent, but a very low recorded weight))
-  group_by(consumer_iso3c, scenario) %>%
-  summarize(change_in_stock = sum(change_in_stock)) %>% # Add weighted % stock changes together per consuming county
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
-  filter(!is.na(region))
+    summarize(change_in_stock = sum(change_in_stock),
+              live_weight_t = sum(live_weight_t)) %>%
+    mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t))
+
+# Write to csv
+write_csv(consumer_stock_change, "../output/consumer_stock_change.csv")
 ```
 
 ```{r add in sensitivity data}
-# Calcualte total foreign weight consumption
-domestic_consumption_weights <- consumption %>%
+# Read in supply importance data
+supply_importance <- read_csv("../data/sensitivity/supply_importance.csv")
+
+# Calculate foreign dependency
+consumer_foreign_dependencies <- supply_importance %>%
+  filter(consumption_source == "foreign") %>%
   group_by(consumer_iso3c, year) %>%
-  filter(consumer_iso3c == producer_iso3c) %>%
-  summarize(domestic_weight = sum(live_weight_t)) %>%
-  arrange(consumer_iso3c)
-
-# Calculate total foreign weight consumption
-foreign_consumption_weights <- consumption %>%
-  group_by(consumer_iso3c, year) %>%
-  filter(consumer_iso3c != producer_iso3c) %>%
-  summarize(foreign_weight = sum(live_weight_t)) %>%
-  arrange(consumer_iso3c)
-
-# Calculate trade dependency
-consumer_foreign_dependencies <- foreign_consumption_weights %>%
-  filter(consumer_iso3c %in% domestic_consumption_weights$consumer_iso3c) %>%
-  left_join(domestic_consumption_weights) %>%
-  group_by(consumer_iso3c, year) %>%
-  summarize(foreign_dependency = round(foreign_weight /
-                                       (foreign_weight +
-                                          domestic_weight), 3)) %>%
-  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region")
-
-
-# Find greatest / least changes in foreign dependency
-# Largest increase = ISL; largest decrease = NZL
-consumer_foreign_dependencies %>%
-  # Filter to get only rows for 1996 and 2019
-  filter(year %in% c(1996, 2019)) %>%
-  # Spread data so that each year gets its own column
-  pivot_wider(names_from = year, values_from = foreign_dependency) %>%
-  # Calculate the difference between 1996 and 2019
-  mutate(diff_2019_1996 = `2019` - `1996`) %>%
-  # Select columns as needed
-  select(consumer_iso3c, diff_2019_1996) %>%
-  arrange(-diff_2019_1996)
-
-# Look at average change in foreign dependency from 2015-2019
-foreign_dependency_slopes <- consumer_foreign_dependencies %>%
-  split(.$consumer_iso3c) %>% 
-  map(~lm(foreign_dependency~year, data = .x)) %>% 
-  map_df(broom::tidy, .id = 'consumer_iso3c') %>%
-  filter(term == 'year') %>%
-  select(consumer_iso3c, "slope" = "estimate") %>%
-  mutate(fill_color = case_when(
-    slope > 0 ~ "1",
-    slope < 0 ~ "0",
-    TRUE ~ NA
-  )) %>%
-  add_region(col = "consumer_iso3c", region.col.name = "region")
-
-
-foreign_dependency_slopes %>%
-  filter(!is.na(region)) %>%
-  ggplot(aes(x = reorder(consumer_iso3c, -slope), 
-             y = slope, fill = region)) +
-  geom_col() +
-  theme_minimal_hgrid() +
-  theme(axis.text.x = element_blank()) +
-  labs(x = "Consuming country", y = "Slope between foreign\ndependency and time", fill = "Region") +
-  scale_fill_manual(values = artis_palette(7)) +
-  ylim(-0.05, 0.05)
-
-foreign_dependency_slopes %>%
-  filter(!is.na(region)) %>%
-  ggplot(aes(x = region, y = slope, fill = region)) +
-  geom_violin(alpha = 0.5) +
-  geom_point() +
-  scale_fill_manual(values = artis_palette(7)) +
-  theme_minimal_hgrid(12) +
-  labs(x = "Consuming country", y = "Slope between foreign\ndependency and time") +
-  guides(fill = "none")
-
-# Get greatest increases --> greatest decreases in fd by eez
-fd_ordered <- foreign_dependency_slopes %>%
-  arrange(-slope) %>%
-  pull(consumer_iso3c)
-
-# Create new directory for foreign dependencies
-if (!dir.exists("../images/foreign dependency ordered/")) {
-  dir.create("../images/foreign dependency ordered/")
-}
-
-for (i in fd_ordered) {
-  
-  # Create image
-  img <- consumer_foreign_dependencies %>%
-    filter(consumer_iso3c == i) %>%
-    ggplot(aes(x = year, y = foreign_dependency)) +
-    geom_line() +
-    geom_point() +
-    theme_minimal_hgrid() +
-    labs(x = "", y = "Prop foreign dependency", title = i) +
-    theme(plot.title = element_text(hjust = 0.5))
-  
-  # Save image
-  ggsave(paste0("../images/foreign dependency ordered/", which(i == fd_ordered), ".jpg"), plot = img, device = "jpeg", height = 4, width = 6, units = "in")
-}
-
-
-# Read in FAO consumer data
-fao_food <- read_csv("../data/FoodBalanceSheets_E_All_Data/FoodBalanceSheets_E_All_Data.csv")
-
-# Convert FAO data to long format
-fao_food_long <- fao_food %>%
-  pivot_longer(cols = c("Y2010", "Y2011", "Y2012", "Y2013", "Y2014", 
-               "Y2015", "Y2016", "Y2017", "Y2018", "Y2019"), names_to = "year") %>%
-  mutate(year = str_replace(year, "Y", ""))
-
-# Extract FAO animal protein totals
-aquatic_animal_proteins <- fao_food_long %>%
-  filter(Element == "Protein supply quantity (t)",
-         Item %in% c("Aquatic Animals, Others", "Cephalopods",
-                     "Crustaceans", "Demersal Fish", "Fish, Seafood",
-                     "Freshwater Fish", "Marine Fish, Other", "Meat, Aquatic Mammals",
-                     "Molluscs, Other"),) %>%
-  mutate(iso3c = countrycode(Area, origin = 'country.name', destination = 'iso3c')) %>%
-  relocate(iso3c, .before = "Area") %>%
-  group_by(iso3c, year) %>%
-  summarize(a_a_protein = sum(value, na.rm = TRUE)) %>%
-  ungroup()
-
-total_protein <- fao_food_long %>%
-  filter(Element == "Protein supply quantity (t)",
-         Item == "Animal Products") %>%
-  mutate(iso3c = countrycode(Area, origin = 'country.name', destination = 'iso3c')) %>%
-  relocate(iso3c, .before = "Area") %>%
-  group_by(iso3c, year) %>%
-  summarize(t_p = sum(value, na.rm = TRUE)) %>%
-  ungroup()
-
-# Produce proportions aquatic animal protein of total conusmed protein
-fao_prop_imports <- left_join(aquatic_animal_proteins, total_protein) %>%
-  group_by(iso3c, year) %>%
-  summarize(prop_aquatic_animal = a_a_protein / t_p) %>%
-  mutate(year = as.numeric(year)) %>%
-  exploreARTIS::add_region("iso3c", region.col.name = "region")
-
-# Create a list of years for which you have files (FAO data only goes back to 2010)
-years <- 2010:2019
-consumption_full <- data.frame()
-
-# Use a loop to read the files and bind them together
-for (i in years) {
-  # Generate the filename
-  file_name <- paste0("../data/full consumption/consumption/consumption_midpoint_HS96_", as.character(i), ".csv")
-  # Read the CSV file
-  yearly_data <- read_csv(file_name)
-  consumption_full <- bind_rows(consumption_full, yearly_data)
-}
-
-# Calculate proportion of consumed materials from different habitats and methods
-habitat_method_props <- consumption_full %>%
-  group_by(year, consumer_iso3c, habitat, method) %>%
-  summarize(total_group_catch = sum(consumption_live_t)) %>%
-  filter(!habitat == "unknown" | 
-         !method == "unknown") %>%
-  group_by(year, consumer_iso3c) %>%
-  mutate(total_catch = sum(total_group_catch)) %>%
-  group_by(year, consumer_iso3c, habitat, method) %>%
-  summarize(prop_consumption = total_group_catch / total_catch) %>%
-  ungroup()
-
-# Join artis and fao food balance sheet data (combines habitat/method props to prop animal protein imports byt fao)
-artis_fao_fbb <- left_join(habitat_method_props, fao_prop_imports, by = c("consumer_iso3c" = "iso3c", "year"))
-
-# How important is marine capture on countries' animal sourced protein supply?
-supply_importance <- artis_fao_fbb %>%
-  group_by(year, consumer_iso3c) %>%
-  mutate(importance_on_protein_cons = prop_consumption * prop_aquatic_animal) %>%
-  filter(!is.na(region)) %>%
-    filter(habitat == "marine",
-         method == "capture", .keep_all = TRUE)
+  summarize(foreign_dependency = sum(prop_consumption)) %>%
+exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region")
 ```
 
 
@@ -554,7 +296,8 @@ f <- country_coverage(prop_population_clean, join_by = "Country Code")
 # LEARNING #
 ############
 
-# Jessica's data
+# Jessica's (UNESCO) data - similar coverage to mean years schooling - fsc had higher data coverage over both World Bank and UNESCO
+
 # avg_education <- read_csv("../data/adaptive capacity/all_national_indicators.csv")
 
 # # mean years schooling data
@@ -688,7 +431,7 @@ variable_coverage %>%
   arrange(-num_countries_missing)
 ```
 
-```{r calculate risk}
+```{r Join e / s / ac to prep for risk calculaton}
 # Prepare AC data so that it can be joined
 
 # Assets
@@ -749,13 +492,13 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(fsc_clean) %>%
   left_join(rol_clean) %>%
   right_join(consumer_stock_change %>% # Add in exposure data
-               select(consumer_iso3c, scenario, change_in_stock), by = "consumer_iso3c") %>%
+               select(consumer_iso3c, scenario, pct_change), by = "consumer_iso3c") %>%
   left_join(supply_importance %>% # Add in fao sensitivity data
               filter(year == 2019,
                      habitat == "marine",
                      method == "capture") %>%
               ungroup() %>%
-              select(consumer_iso3c, importance_on_protein_cons),
+              select(consumer_iso3c, aa_reliance_pct),
             by = "consumer_iso3c") %>%
   left_join(consumer_foreign_dependencies %>% # Add in foreign dependency sensitivity
               filter(year == 2019) %>%
@@ -766,5 +509,3 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
 # Save joined data to output folder
 write_parquet(e_s_ac_data, "../output/e_s_ac_data.parquet")
 ```
-
-

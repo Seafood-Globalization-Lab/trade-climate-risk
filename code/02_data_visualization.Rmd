@@ -564,6 +564,47 @@ consumer_stock_change  %>%
     axis.text.x = element_text(size = rel(0.55)),
     axis.title.x = element_text(size = rel(0.68), margin = margin(t = 3, b = 3), face = "bold")
   )
+
+
+
+consumer_stock_change %>%
+  ggplot(aes(x = pct_change, fill = scenario)) +
+  geom_histogram(alpha = 0.5, position = "identity", color = "black", boundary = 0) +
+  theme_cowplot() +
+  labs(x = "% Change in stock\n(future from present)", y = "# Countries", fill = "Scenario")
+
+consumer_stock_change %>%
+  exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(y = region, x = pct_change, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  theme_cowplot(10) +
+  facet_wrap(~ scenario) +
+  scale_fill_manual(values = artis_palette(6)) +
+  labs(x = "% Change in stock\n(future from present)", y = "") +
+  guides(fill = "none") +
+  theme_light()
+
+consumer_stock_change_pre %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t)) %>%
+  ggplot(aes(x = pct_change, fill = scenario)) +
+  geom_histogram(color = "black", boundary = 0) +
+  xlim(-100, 100) +
+  facet_wrap(~ scenario) +
+  theme_cowplot() +
+  labs(x = "% Change Catch", y = "Count") +
+  guides(fill = "none")
+
+df %>%
+  pivot_longer(cols = c("ssp126", "ssp585")) %>%
+  ggplot(aes(x = value, fill = name)) +
+  geom_histogram(color = "black", boundary = 0) +
+  theme_cowplot() +
+  xlim(-100, 100) +
+  facet_wrap(~ name) +
+  labs(x = "% Change Catch", y = "Count") +
+  guides(fill = "none")
 ```
 
 

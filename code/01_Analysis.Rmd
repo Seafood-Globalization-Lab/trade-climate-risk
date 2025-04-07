@@ -12,7 +12,35 @@ library(tidyverse)
 library(arrow)
 ```
 
+```{r initialize functions}
+# Ocean polygon
+ocean <- st_polygon(list(cbind(c(seq(-180, 179, len = 100), rep(180, 100), 
+                        seq(179, -180, len = 100), rep(-180, 100)),
+                      c(rep(-90, 100), seq(-89, 89, len = 100),
+                        rep(90, 100), seq(89, -90, len = 100))))) |>
+  st_sfc(crs = "WGS84") |>
+  st_as_sf()
 
+create_map <- function(data, fill = "prop_missing") {
+  world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+world_map <- world_map %>%
+  left_join(data, by = c("iso_a3" = "eez_iso3c"))
+  
+  world_map %>%
+ggplot() +
+  geom_sf(data = ocean, fill = "#8080ff80") +
+  geom_sf(aes(fill = !!sym(fill)), color = "black") + 
+  scale_fill_viridis_c(option = "plasma") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  coord_sf(crs = "+proj=robin")
+}
+```
+
+# Objective
+
+Calculate the risk index given the components for a country's exposure, sensitivity, and adaptive capacity. 
 
 ```{r calculate risk}
 e_s_ac_data <- read_parquet("../output/e_s_ac_data.parquet")
@@ -51,15 +79,15 @@ adaptive_capacity_calcs <- e_s_ac_data %>%
 risk <- left_join(e_s_ac_data, adaptive_capacity_calcs, by = "consumer_iso3c") %>%
   filter(!is.na(adaptive_capacity),
          scenario == "ssp585") %>%
-  mutate(across(c(change_in_stock, importance_on_protein_cons,
+  mutate(across(c(pct_change, aa_reliance_pct,
                   foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
   group_by(consumer_iso3c) %>%
-  mutate(importance_on_protein_cons_scaled = importance_on_protein_cons * 0.5,
+  mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
          foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
-         sensitivity = sum(importance_on_protein_cons_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+         sensitivity = sum(aa_reliance_pct_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
   filter(!is.na(foreign_dependency_scaled),
-                !is.na(importance_on_protein_cons_scaled)) %>%
-  rename(exposure = "change_in_stock_scaled") %>%
+                !is.na(aa_reliance_pct_scaled)) %>%
+  rename(exposure = "pct_change_scaled") %>%
   select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
   mutate(adaptive_capacity = adaptive_capacity) %>%
   mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
@@ -75,7 +103,7 @@ pairs(risk[,2:5])
 cor(risk[,2:5])
 
 e_s_ac_data %>%
-  ggplot(aes(x = change_in_stock)) +
+  ggplot(aes(x = pct_change)) +
   geom_histogram(color = "black") +
   facet_wrap(~ scenario) +
   theme_cowplot() +
@@ -260,15 +288,15 @@ for (i in ac_components$ac_component) {# iterate through each component
           risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
           filter(!is.na(adaptive_capacity),
                  scenario == "ssp126") %>%
-          mutate(across(c(change_in_stock, importance_on_protein_cons,
+          mutate(across(c(pct_change, aa_reliance_pct,
                           foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
           group_by(consumer_iso3c) %>%
-          mutate(importance_on_protein_cons_scaled = importance_on_protein_cons * 0.5,
+          mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
                  foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
-                 sensitivity = sum(importance_on_protein_cons_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+                 sensitivity = sum(aa_reliance_pct_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
           filter(!is.na(foreign_dependency_scaled),
-                        !is.na(importance_on_protein_cons_scaled)) %>%
-          rename(exposure = "change_in_stock_scaled") %>%
+                        !is.na(aa_reliance_pct_scaled)) %>%
+          rename(exposure = "pct_change_scaled") %>%
           select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
           mutate(adaptive_capacity = adaptive_capacity) %>%
           mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
@@ -433,15 +461,15 @@ for (i in ac_components$ac_component) {
           risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
           filter(!is.na(adaptive_capacity),
                  scenario == "ssp126") %>%
-          mutate(across(c(change_in_stock, importance_on_protein_cons,
+          mutate(across(c(pct_change, aa_reliance_pct,
                           foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
           group_by(consumer_iso3c) %>%
-          mutate(importance_on_protein_cons_scaled = importance_on_protein_cons * 0.5,
+          mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
                  foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
-                 sensitivity = sum(importance_on_protein_cons_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+                 sensitivity = sum(aa_reliance_pct_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
           filter(!is.na(foreign_dependency_scaled),
-                        !is.na(importance_on_protein_cons_scaled)) %>%
-          rename(exposure = "change_in_stock_scaled") %>%
+                        !is.na(aa_reliance_pct_scaled)) %>%
+          rename(exposure = "pct_change_scaled") %>%
           select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
           mutate(adaptive_capacity = adaptive_capacity) %>%
           mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
