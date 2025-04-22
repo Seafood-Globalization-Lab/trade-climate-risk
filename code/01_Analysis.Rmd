@@ -112,6 +112,21 @@ e_s_ac_data %>%
   labs(x = "% Change in stock", y = "# countries")
 
 # Who sources from countries that are more or less vulnerable
+
+consumption %>%
+  filter(year == 2019) %>%
+  left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+  rename(producer_risk = "vulnerability") %>%
+  filter(producer_iso3c != consumer_iso3c) %>%
+  mutate(risk_sum = live_weight_t * producer_risk) %>%
+  filter(!is.na(producer_risk)) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(total_risk = -log(-sum(risk_sum))) %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+  create_map(fill = "total_risk") +
+  labs(fill = "Sourcing riskiness from foreign imports") +
+  theme(legend.ticks = element_blank(),
+        legend.text = element_blank())
 ```
 
 ```{r prepare e/s/ac data for sensitivity analysis}
