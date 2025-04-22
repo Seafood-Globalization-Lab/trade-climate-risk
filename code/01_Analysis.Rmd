@@ -76,9 +76,8 @@ adaptive_capacity_calcs <- e_s_ac_data %>%
 
 
 # Calculate vulernability (Risk = Exposure + Risk - Adaptive Capacity)
-risk <- left_join(e_s_ac_data, adaptive_capacity_calcs, by = "consumer_iso3c") %>%
-  filter(!is.na(adaptive_capacity),
-         scenario == "ssp585") %>%
+risk <- left_join(e_s_ac_data %>% filter(scenario == "ssp585"), adaptive_capacity_calcs, by = "consumer_iso3c") %>%
+  filter(!is.na(adaptive_capacity)) %>%
   mutate(across(c(pct_change, aa_reliance_pct,
                   foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
   group_by(consumer_iso3c) %>%
@@ -91,6 +90,9 @@ risk <- left_join(e_s_ac_data, adaptive_capacity_calcs, by = "consumer_iso3c") %
   select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
   mutate(adaptive_capacity = adaptive_capacity) %>%
   mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
+
+# How does the rank order change for adaptive capacity
+# Calculate rank order 
 
 # Map vulnerability
 risk %>%
@@ -108,6 +110,8 @@ e_s_ac_data %>%
   facet_wrap(~ scenario) +
   theme_cowplot() +
   labs(x = "% Change in stock", y = "# countries")
+
+# Who sources from countries that are more or less vulnerable
 ```
 
 ```{r prepare e/s/ac data for sensitivity analysis}
@@ -132,7 +136,6 @@ e_s_ac_long <- e_s_ac_data %>% # Put e/s/ac data into long format
                                                      "rol_scaled") ~ "organization"))
 ```
 
-
 ```{r sensitivity analysis on AC variables within AC components towards risk}
 #number of variables within each component
 ac_variables <- e_s_ac_long %>%
@@ -152,6 +155,7 @@ num_org_vars <- ac_components[ac_components$ac_component == "organization", ]$nu
 # Set initial loop values
 pval = 1
 modifier = 0
+conditional_importance = 0.9
 for (i in ac_components$ac_component) {# iterate through each component
   
   # number of variables per adaptive capacity variable
@@ -161,8 +165,8 @@ for (i in ac_components$ac_component) {# iterate through each component
     # Reset modifier
     modifier = 0
     pval = 1
-    while (pval >= 0.05 &
-           (modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))) <= 0.90) {
+    conditional = 0
+    while (conditional <= conditional_importance) {
       # Create the concentration vector with the correct number of 50's
       concentration <- rep(50, num_vars)
       concentration[j] <- concentration[j] + modifier
@@ -174,6 +178,7 @@ for (i in ac_components$ac_component) {# iterate through each component
       dirichlet_probs <- samples[sample(1:nrow(samples), 1), ]
       
       modifier <- modifier + 5
+      conditional <- round((modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))), 2)
       
       # assets
       if (i == "assets") {
@@ -285,9 +290,9 @@ for (i in ac_components$ac_component) {# iterate through each component
         filter(!is.na(adaptive_capacity))
       
             # Calculate simulated vulnerability
-          risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
-          filter(!is.na(adaptive_capacity),
-                 scenario == "ssp126") %>%
+          risk_simulated <- left_join(e_s_ac_data %>%
+                                        filter(scenario == "ssp126"), ac_simulated, by = "consumer_iso3c") %>%
+          filter(!is.na(adaptive_capacity)) %>%
           mutate(across(c(pct_change, aa_reliance_pct,
                           foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
           group_by(consumer_iso3c) %>%
@@ -301,74 +306,50 @@ for (i in ac_components$ac_component) {# iterate through each component
           mutate(adaptive_capacity = adaptive_capacity) %>%
           mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
           
-          t_test <- t.test(risk_simulated$vulnerability, risk$vulnerability)
-          pval <- t_test$p.value
-          # print(pval)
-          # print(concentration)
+          correlation <- round(cor(risk_simulated$adaptive_capacity,
+                             risk$adaptive_capacity,
+                             method = "kendall"), 3)
     }
+    
+    if (which(i == ac_components$ac_component) == 1 & j == 1) {
+      print(paste0("The following are Kendall Tau rank correlations between the null (even variable importance) and the simulated ranks of calculated adaptive capacity values given a `", conditional_importance * 100, "%` importance on the target adaptive capacity variable:"))
+    }
+    
+    cat("\n")
+    
     if (j == 1) {
       cat(sprintf("*** AC VARIABLE COMPONENT: %s ***\n", str_to_upper(i)))
     }
-    
-    # Check for variables not sensitive
-    if ((modifier + 50) / ((modifier + 50) + (50 * (num_vars - 1))) > 0.90) {
-      cat(sprintf(
-        "##### Variable: %s is not sensitive #####\n",
-        ac_variables[ac_variables$ac_component == i, ]$ac_variable[j]
-      ))
-      
-      if (j == num_vars) {
-          cat("\n")
-        }
-      
-    }
-    
-    # For sensitive variables
-    if (pval < 0.05) {
-      cat("\n")
+  
       cat(
         sprintf(
-          "Variable: %s was sensitive with the following parameters:\n",
+          "Variable `%s`:",
           ac_variables[ac_variables$ac_component == i, ]$ac_variable[j]
-        )
+        ),
+        correlation
       )
       
-      # Print Dirichlet concentration parameters
-      cat("Dirichlet concentration parameters:\n")
-      print(concentration)
-      
-      # Print Dirichlet proportions
-      cat("Dirichlet proportions:\n")
-      print(round(dirichlet_probs, 2))
-      
-      cat("\n")
-      if (!(which(i == ac_components$ac_component) == 4 & j == num_vars)) {
-        cat("---\n")
+      if (j == num_vars & which(i == ac_components$ac_component) != 4) {
+        cat("\n\n---\n")
       }
       
-      # Add spacing between components if it's the last variable
-      if (j == num_vars) {
-        cat("\n")
-      }
     }
   }
-  
-  
-}
 ```
 
 ```{r sensitivity analysis on overall component importance towards risk}
 # Set initial loop values
 pval = 1
 modifier = 0
+conditional_importance = 0.9
 for (i in ac_components$ac_component) {
   # iterate through each component
   # number of variables per adaptive capacity variable
   # Reset modifier
   pval = 1
   modifier = 0
-    while (pval >= 0.05 &
-           (modifier + 50) / ((modifier + 50)+ (50 * (num_vars - 1))) <= 0.90) {
+  conditional = 0
+    while (conditional <= conditional_importance) {
   
 
       # Create the concentration vector with the correct number of 50's
@@ -383,6 +364,7 @@ for (i in ac_components$ac_component) {
       dirichlet_probs <- samples[sample(1:nrow(samples), 1), ]
       
       modifier <- modifier + 5
+      conditional <- round((modifier + 50) / ((modifier + 50) + (50 * (num_vars - 1))), 2)
       
       ac_simulated <- e_s_ac_long %>%
         mutate(value_scaled = case_when(
@@ -474,56 +456,22 @@ for (i in ac_components$ac_component) {
           mutate(adaptive_capacity = adaptive_capacity) %>%
           mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
           
-          t_test <- t.test(risk_simulated$vulnerability, risk$vulnerability)
-          pval <- t_test$p.value
-          # print(pval)
-          # print(concentration)
+          correlation <- round(cor(risk_simulated$adaptive_capacity,
+                             risk$adaptive_capacity,
+                             method = "kendall"), 3)
     }
-    if (j == 1) {
-      cat(sprintf("*** AC VARIABLE COMPONENT: %s ***\n", str_to_upper(i)))
-    }
-    
-    # Check for variables not sensitive
-    if ((modifier + 50) / ((modifier + 50) + (50 * (num_vars - 1))) > 0.90) {
-      cat(sprintf(
-        "##### Component: %s is not sensitive #####\n",
-        i
-      ))
-      
-      if (j == num_vars) {
-          cat("\n")
-        }
-      
+    if (which(i == ac_components$ac_component) == 1) {
+      print(paste0("The following are Kendall Tau rank correlations between the null (even variable importance) and the simulated ranks of calculated adaptive capacity values given a `", conditional_importance * 100, "%` importance on the target adaptive capacity component. Note that the individual importance between the other three components is '", round(((1 - conditional_importance) / 3) * 100, 1), "%`."))
     }
     
-    # For sensitive variables
-    if (pval < 0.05) {
+    cat("\n")
+  
       cat(
         sprintf(
-          "Component: %s was sensitive with the following parameters:\n",
+          "AC component `%s`:",
           i
-        )
+        ),
+        correlation
       )
-      
-      # Print Dirichlet concentration parameters
-      cat("Dirichlet concentration parameters:\n")
-      print(concentration)
-      
-      # Print Dirichlet proportions
-      cat("Dirichlet proportions:\n")
-      print(round(dirichlet_probs, 2))
-      
-      cat("\n")
-      if (!which(i == ac_components$ac_component) == 4) {
-        cat("---\n")
-      }
-      
-      # Add spacing between components if it's the last variable
-      if (j == num_vars) {
-        cat("\n")
-      }
     }
-  
-  
-}
 ```
