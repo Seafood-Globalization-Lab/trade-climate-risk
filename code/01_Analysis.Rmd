@@ -112,7 +112,6 @@ e_s_ac_data %>%
   labs(x = "% Change in stock", y = "# countries")
 
 # Who sources from countries that are more or less vulnerable
-
 consumption %>%
   filter(year == 2019) %>%
   left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
