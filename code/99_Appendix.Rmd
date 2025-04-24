@@ -1017,6 +1017,44 @@ bind_rows(fb_presences_country, slb_presences_country) %>%
   filter((!(country %in% x) | is.na(country)) | ScientificName %in% unaligned_names)
 
 conusmption_sciname
+
+# Get data over to Jessica
+# fb_slb_species_data <- bind_rows(fb_presences_country, slb_presences_country)
+# fb_slb_species_data <- fb_slb_species_data %>%
+#   rename(Sciname = Species, Species = TrueSpecies)
+# str(fb_slb_species_data)
+# write_parquet(fb_slb_species_data, "../data/fb_slb_species_data.parquet")
+# write_csv(fb_slb_species_data, "../data/fb_slb_species_data.csv")
+
+# Get fb/slb countries
+fb_slb_countries <- bind_rows(fb_presences_country ,slb_presences_country) %>%
+  mutate(country = countrycode(country, origin = 'country.name', destination = 'iso3c')) %>%
+  distinct(country) %>% arrange(country)
+  
+# Get artis countries
+artis_countries <- consumption %>%
+distinct(consumer_iso3c) %>%
+  arrange(consumer_iso3c)
+
+# Join artis/fb_slb countries
+joined_countries <- full_join(artis_countries %>% mutate(artis = 1), fb_slb_countries %>% mutate(fb_slb = 1), by = c("consumer_iso3c" = "country"))
+
+# Countries that both artis/fb_slb has
+x <- joined_countries %>%
+  filter(artis == 1 & fb_slb == 1) %>%
+  pull(consumer_iso3c)
+
+# Countries that ARTIS has that fb_slb doesn't have
+joined_countries %>%
+  filter(artis == 1 & is.na(fb_slb))
+
+unaligned_names <- read.csv("../data/unmatched_names.csv")
+unaligned_names <- unaligned_names %>% pull(fb_slb_scientific_name)
+
+# Number of fb/slb rows that are not include in analysus due to unaligned countries/scinames
+bind_rows(fb_presences_country, slb_presences_country) %>%
+  mutate(country = countrycode(country, origin = 'country.name', destination = 'iso3c'), ScientificName = str_to_lower(ScientificName)) %>%
+  filter((!(country %in% x) | is.na(country)) | ScientificName %in% unaligned_names)
 ```
 
 ```{r consuption data reading}
