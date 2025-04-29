@@ -46,3 +46,5 @@ renv/cache/
 
 /images/*
 !/images/.gitkeep
+/output/
+.Rhistory
