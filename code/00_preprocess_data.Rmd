@@ -25,9 +25,9 @@ library(sf)
 # Load in packages needed for ARTIS
 library(devtools)
 library(tidytext)
-# devtools::install_github("davidsjoberg/ggsankey")
+devtools::install_github("davidsjoberg/ggsankey")
 library(ggsankey)
-# devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
+devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
 library(exploreARTIS)
 
 # For Packages for fishbase
@@ -128,11 +128,6 @@ df_preprocessed %>% distinct(eez_name)
 # Read in cosnumption data
 consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
 ```
-
-```{r}
-
-```
-
 
 ```{r exposure (add in future climate data)}
 # Read in future climate data
