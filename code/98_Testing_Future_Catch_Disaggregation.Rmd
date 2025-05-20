@@ -1,0 +1,15 @@
+---
+title: "98_Testing_Future_Catch_Disaggregation"
+author: "Connor Quiroz"
+date: "2025-05-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+supply_importance <- read_csv("../data/sensitivity/supply_importance.csv")
+```
+
