@@ -9,7 +9,34 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
-supply_importance <- read_csv("../data/sensitivity/supply_importance.csv")
+Where to find data to read in: go to 00_preprocess_data line 134-144 to get preprocessed future climate data
+
+```{r read in data}
+# Read in sciname data (for joining to scinames of future climate)
+sciname <- read_csv("../data/sciname.csv")
+```
+
+```{r disaggregate data}
+sciname_taxa <- sciname %>% 
+  mutate(taxa_level = case_when(
+          sciname == kingdom ~ "kingdom",
+          sciname == phylum ~ "phylum",
+          sciname == superclass ~ "superclass",
+          sciname == class ~ "class",
+          sciname == order ~ "order",
+          sciname == family ~ "family",
+          sciname == subfamily ~ "subfamily",
+          sciname == genus ~ "genus",
+          str_detect(sciname, pattern = "\ ") ~ "species"
+        ))
+  
+  
+full_join(df1, sciname_taxa, by = "sciname") %>%
+  filter(is.na(eez_iso3c))
+
+a <- as.data.table(future_climate_sciname)
+
+
+str(future_climate_sciname)
 ```
 

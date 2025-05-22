@@ -143,6 +143,8 @@ df1 <- df %>%
   summarize(`ssp126` = mean(`ssp126`),
             `ssp585` = mean(`ssp585`))
 
+## SWITCH OVER TO 98_Testing_Future_catch_Disaggregation
+
 # Filter out consumption data so it only includes the future names
 # consumption_future <- consumption %>%
 #   filter(sciname_hs_modified %in% future_climate_scinames,
