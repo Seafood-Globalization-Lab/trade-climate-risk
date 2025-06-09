@@ -43,7 +43,7 @@ ggplot() +
 Calculate the risk index given the components for a country's exposure, sensitivity, and adaptive capacity. 
 
 ```{r calculate risk}
-# e_s_ac_data <- read_parquet("../output/e_s_ac_data.parquet")
+e_s_ac_data <- read_parquet("../output/e_s_ac_data.parquet")
 
 # Calculate adaptive capacity across variables
 adaptive_capacity_calcs <- e_s_ac_data %>%

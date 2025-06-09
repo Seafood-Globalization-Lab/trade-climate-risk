@@ -168,7 +168,7 @@ test_data <- left_join(consumption_sciname, df1, by = c("eez_iso3c", "sciname_hs
 
 # Create function to average across across every future climate sciname for every taxa level names (e.g., order, class, genus)
 compute_taxa_averages <- function(df, tax_level) {
-  df %>%f
+  df %>%
     filter(!is.na(ssp126) | !is.na(ssp585)) %>%  # Keep only true species
     group_by(eez_iso3c, !!sym(tax_level)) %>%    # Group by EEZ & chosen tax level
     summarise(
