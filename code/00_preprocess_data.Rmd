@@ -25,16 +25,10 @@ library(sf)
 # Load in packages needed for ARTIS
 library(devtools)
 library(tidytext)
-devtools::install_github("davidsjoberg/ggsankey")
+# devtools::install_github("davidsjoberg/ggsankey")
 library(ggsankey)
-devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
+# devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
 library(exploreARTIS)
-
-# For Packages for fishbase
-# remotes::install_github("cboettig/duckdbfs", force = TRUE)
-# remotes::install_github("ropensci/rfishbase")
-library(duckdbfs)
-library(rfishbase)
 ```
 
 # Data Cleaning
@@ -127,14 +121,14 @@ df_preprocessed %>% distinct(eez_name)
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
 consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
+
+# Read in sciname data (for joining to scinames of future climate)
+sciname <- read_csv("../data/sciname.csv")
 ```
 
-```{r exposure (add in future climate data)}
+```{r disaggregate future climate measurements}
 # Read in future climate data
 df <- read_csv("../output/future_climate_joined.csv")
-
-# Get current list of scinames in the future climate data
-future_climate_scinames <- unique(df$sciname)
 
 # Group by species and by region so that only species is taken into consideration
 df1 <- df %>%
@@ -143,42 +137,112 @@ df1 <- df %>%
   summarize(`ssp126` = mean(`ssp126`),
             `ssp585` = mean(`ssp585`))
 
-## SWITCH OVER TO 98_Testing_Future_catch_Disaggregation
+sciname_taxa <- sciname %>% 
+  mutate(taxa_level = case_when(
+    sciname == kingdom ~ "kingdom",
+    sciname == phylum ~ "phylum",
+    sciname == superclass ~ "superclass",
+    sciname == class ~ "class",
+    sciname == order ~ "order",
+    sciname == family ~ "family",
+    sciname == subfamily ~ "subfamily",
+    sciname == genus ~ "genus",
+    str_detect(sciname, " ") ~ "species"
+  )) %>%
+  mutate(species = case_when(
+    str_count(sciname, " ") == 1 ~ word(sciname, 2),
+    TRUE ~ NA_character_
+  )) %>% # Add species column name
+  relocate(species, .before = genus) %>% 
+  select(-common_name, -isscaap)
 
 # Filter out consumption data so it only includes the future names
-# consumption_future <- consumption %>%
-#   filter(sciname_hs_modified %in% future_climate_scinames,
-#          year == 2019)
-
-# # Filter out consumption data so it only includes the future names
 consumption_future <- consumption %>%
   filter(year == 2019)
-# 
-sp_change_ave <- df1 %>%
-  group_by(sciname) %>%
-  # if we gapfill along these lines, we will probably want to weight by
-  # catch or pull from nearby EEZs
-  summarise(ssp126_ave = mean(ssp126),
-            ssp585_ave = mean(ssp585))
-# 
-# # Join future data on consumption data
-consumption_future_joined <- consumption_future %>%
-  full_join(df1, by = c("sciname_hs_modified" = "sciname", "eez_iso3c")) %>%
-  full_join(sp_change_ave,
-            by = c("sciname_hs_modified" = "sciname")) %>%
-  mutate(ssp126 = case_when(
-    is.na(ssp126) ~ ssp126_ave,
-    TRUE ~ ssp126),
-    ssp585 = case_when(
-      is.na(ssp585) ~ ssp585_ave,
-      TRUE ~ ssp585))
 
+# Join consumption to sciname data
+consumption_sciname <- left_join(consumption_future, sciname_taxa, by = c("sciname_hs_modified" = "sciname"))
+
+# Join consumption/sciname by sciname / eez
+test_data <- left_join(consumption_sciname, df1, by = c("eez_iso3c", "sciname_hs_modified" = "sciname"))
+
+# Create function to average across across every future climate sciname for every taxa level names (e.g., order, class, genus)
+compute_taxa_averages <- function(df, tax_level) {
+  df %>%f
+    filter(!is.na(ssp126) | !is.na(ssp585)) %>%  # Keep only true species
+    group_by(eez_iso3c, !!sym(tax_level)) %>%    # Group by EEZ & chosen tax level
+    summarise(
+      avg_ssp126 = mean(ssp126, na.rm = TRUE),
+      avg_ssp585 = mean(ssp585, na.rm = TRUE),
+      .groups = "drop"  # Prevent unexpected grouping behavior
+    )
+}
+
+# Compute averages across all taxa levels
+averages_genus <- compute_taxa_averages(test_data, "genus") %>%
+  rename(taxa_name = genus) %>%
+  mutate(taxa_level = "genus")
+
+averages_subfamily <- compute_taxa_averages(test_data, "subfamily") %>%
+  rename(taxa_name = subfamily) %>%
+  mutate(taxa_level = "subfamily")
+
+averages_family <- compute_taxa_averages(test_data, "family") %>%
+  rename(taxa_name = family) %>%
+  mutate(taxa_level = "family")
+
+averages_order <- compute_taxa_averages(test_data, "order") %>%
+  rename(taxa_name = order) %>%
+  mutate(taxa_level = "order")
+
+averages_class <- compute_taxa_averages(test_data, "class") %>%
+  rename(taxa_name = class) %>%
+  mutate(taxa_level = "class")
+
+averages_phylum <- compute_taxa_averages(test_data, "phylum") %>%
+  rename(taxa_name = phylum) %>%
+  mutate(taxa_level = "phylum")
+
+# Combine all aggregated results into a single lookup table:
+lookup_table <- bind_rows(averages_genus, averages_subfamily, averages_family, averages_order, averages_class, averages_phylum)
+
+
+# Currently: averaging future climate data to higher values adds ~ 300,000 rows
+interpolated_future_data <- left_join(test_data, lookup_table, by = c("eez_iso3c", "sciname_hs_modified" = "taxa_name", "taxa_level")) %>%
+  mutate(
+    ssp126 = if_else(is.na(ssp126), avg_ssp126, ssp126), # Interpolate non-true species to averages created from original future climate data based on true species
+    ssp585 = if_else(is.na(ssp585), avg_ssp585, ssp585)
+  ) %>%
+  select(-avg_ssp126, -avg_ssp585)
+  
+# Just a check - not all the scinames in Juliano's future climate data join to artis because they are organized by sciname and eez. So not every sciname will join to the artis sciname because while Juliano's sciname might be in artis, it might not be in the same eez too.
+  full_join(
+    consumption_sciname %>% mutate(artis = TRUE),
+    df1 %>%
+      mutate(fcd = TRUE),
+    by = c("eez_iso3c", "sciname_hs_modified" = "sciname")
+  ) %>%
+    filter(fcd == TRUE) %>%
+    ungroup() %>%
+    filter(is.na(artis), fcd == TRUE)
+  
+# Remove previous objects to keep data usage small
+rm(consumption_sciname, sciname_taxa, consumption,
+   averages_class, averages_family, averages_genus,
+   averages_order, averages_phylum, averages_subfamily,
+   df, lookup_table, sciname, sciname_taxa, test_data)
+gc() # Garbage collection to clean up storage
+```
+
+
+```{r derive exposure measurements via disaggregated future climate data}
+### BRINGING IN interpolated_future_data from 98_Testing_Future_Catch_Disaggregation ###
 
 # Join future data on consumption data
-consumption_future <- left_join(consumption_future_joined, df1, by = c("sciname_hs_modified" = "sciname", "eez_iso3c"))
+consumption_future <- left_join(interpolated_future_data, df1, by = c("sciname_hs_modified" = "sciname", "eez_iso3c"))
 
 # Pivot dataset to longer to make multiscenario visualization easier
-consumption_future <- consumption_future_joined %>%
+consumption_future <- interpolated_future_data %>%
   pivot_longer(cols = c(`ssp126`,
                         `ssp585`), 
                names_to = "scenario",
@@ -208,6 +272,10 @@ consumer_stock_change <- consumer_stock_change_pre %>%
 
 # Write to csv
 write_csv(consumer_stock_change, "../output/consumer_stock_change.csv")
+
+# Remove previous objects to keep data usage small
+rm(df1, interpolated_future_data, consumer_stock_change_pre)
+gc() # Garbage collection to clean up storage
 ```
 
 ```{r add in sensitivity data}
@@ -220,12 +288,26 @@ consumer_foreign_dependencies <- supply_importance %>%
   group_by(consumer_iso3c, year) %>%
   summarize(foreign_dependency = sum(prop_consumption)) %>%
 exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region")
+
+# Calculate aquatic animal reliance
+aa_reliance <- supply_importance %>% # Add in fao sensitivity data
+              filter(year == 2019,
+                     habitat == "marine",
+                     method == "capture") %>%
+              group_by(consumer_iso3c) %>% # Sum across domestic / foreign consumption
+              summarize(aa_reliance_pct = sum(aa_reliance_pct)) %>%
+              ungroup()
+
+# Remove previous objects to keep data usage small
+rm(supply_importance)
+gc() # Garbage collection to clean up storage
 ```
 
 
 ```{r process adaptive capacity data}
 # Get ARTIS consuming countries (For identifying data coverage)
-consuming_countries <- consumption %>%
+# changed consumption to consumption_future
+consuming_countries <- consumption_future %>%
   filter(consumer_iso3c != producer_iso3c) %>%
   distinct(consumer_iso3c) %>%
   mutate(artis = 1)
@@ -517,22 +599,19 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(government_effectiveness_clean) %>%
   left_join(fsc_clean) %>%
   left_join(rol_clean) %>%
-  right_join(consumer_stock_change %>% # Add in exposure data
-               select(consumer_iso3c, scenario, pct_change), by = "consumer_iso3c") %>%
-  left_join(supply_importance %>% # Add in fao sensitivity data
-              filter(year == 2019,
-                     habitat == "marine",
-                     method == "capture") %>%
-              group_by(consumer_iso3c) %>% # Sum across domestic / foreign consumption
-              summarize(aa_reliance_pct = sum(aa_reliance_pct)) %>%
-              ungroup(),
-            by = "consumer_iso3c") %>%
+  right_join(aa_reliance) %>% # Right join to only include consuming ARTIS countries (Aquatic animal reliance Sensitivity)
   left_join(consumer_foreign_dependencies %>% # Add in foreign dependency sensitivity
               filter(year == 2019) %>%
               ungroup() %>%
-              select(consumer_iso3c, foreign_dependency),
-            by = "consumer_iso3c")
+              select(consumer_iso3c, foreign_dependency)) %>%
+  left_join(consumer_stock_change) # Add in exposure data
 
 # Save joined data to output folder
 write_parquet(e_s_ac_data, "../output/e_s_ac_data.parquet")
+
+# Remove previous objects to keep data usage small
+rm(a, b, c, d, e, f, h, i, j, k, aa_reliance, ac_coverage,
+   consumer_foreign_dependencies, consumer_stock_change, consuming_countries, consumption_future, fsc, fsc_clean,
+   gdp, gdp_clean, government_effectiveness, government_effectiveness_clean, hci, hci_clean, life_expectancy, life_expectancy_clean, missing_artis_ac_countries, prop_population_clean, rol, rol_clean, sanitation, sanitation_clean, supermarkets, supermarkets_clean, total_labor_force, total_population, total_population_clean, trade_gdp, trade_gdp_clean, variable_coverage)
+gc() # Garbage collection to clean up storage
 ```

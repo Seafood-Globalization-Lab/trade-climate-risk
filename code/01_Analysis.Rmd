@@ -43,7 +43,7 @@ ggplot() +
 Calculate the risk index given the components for a country's exposure, sensitivity, and adaptive capacity. 
 
 ```{r calculate risk}
-e_s_ac_data <- read_parquet("../output/e_s_ac_data.parquet")
+# e_s_ac_data <- read_parquet("../output/e_s_ac_data.parquet")
 
 # Calculate adaptive capacity across variables
 adaptive_capacity_calcs <- e_s_ac_data %>%
@@ -76,7 +76,7 @@ adaptive_capacity_calcs <- e_s_ac_data %>%
 
 
 # Calculate vulernability (Risk = Exposure + Risk - Adaptive Capacity)
-risk <- left_join(e_s_ac_data %>% filter(scenario == "ssp585"), adaptive_capacity_calcs, by = "consumer_iso3c") %>%
+risk <- left_join(e_s_ac_data %>% filter(scenario == "ssp126"), adaptive_capacity_calcs, by = "consumer_iso3c") %>%
   filter(!is.na(adaptive_capacity)) %>%
   mutate(across(c(pct_change, aa_reliance_pct,
                   foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
@@ -112,20 +112,20 @@ e_s_ac_data %>%
   labs(x = "% Change in stock", y = "# countries")
 
 # Who sources from countries that are more or less vulnerable
-consumption %>%
-  filter(year == 2019) %>%
-  left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
-  rename(producer_risk = "vulnerability") %>%
-  filter(producer_iso3c != consumer_iso3c) %>%
-  mutate(risk_sum = live_weight_t * producer_risk) %>%
-  filter(!is.na(producer_risk)) %>%
-  group_by(consumer_iso3c) %>%
-  summarize(total_risk = -log(-sum(risk_sum))) %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-  create_map(fill = "total_risk") +
-  labs(fill = "Sourcing riskiness from foreign imports") +
-  theme(legend.ticks = element_blank(),
-        legend.text = element_blank())
+# consumption %>%
+#   filter(year == 2019) %>%
+#   left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+#   rename(producer_risk = "vulnerability") %>%
+#   filter(producer_iso3c != consumer_iso3c) %>%
+#   mutate(risk_sum = live_weight_t * producer_risk) %>%
+#   filter(!is.na(producer_risk)) %>%
+#   group_by(consumer_iso3c) %>%
+#   summarize(total_risk = -log(-sum(risk_sum))) %>%
+#   rename(eez_iso3c = "consumer_iso3c") %>%
+#   create_map(fill = "total_risk") +
+#   labs(fill = "Sourcing riskiness from foreign imports") +
+#   theme(legend.ticks = element_blank(),
+#         legend.text = element_blank())
 ```
 
 ```{r prepare e/s/ac data for sensitivity analysis}
