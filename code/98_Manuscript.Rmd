@@ -1,0 +1,165 @@
+---
+title: ""
+author: ""
+date: ""
+output:
+  pdf_document:
+    latex_engine: xelatex
+mainfont: "Times New Roman"
+fontsize: 11pt
+header-includes:
+  - \usepackage{indentfirst}
+  - \setlength{\parindent}{0.2in}
+  - \usepackage{lineno}
+  - \usepackage{booktabs}   % for better rules (\toprule, \midrule, \bottomrule)
+  - \usepackage{tabularx}   % for adjustable-width columns
+  - \usepackage{caption}    % if you need extra caption customization
+  - \linenumbers
+  - \usepackage{float}
+bibliography: "../data/chapter_two_citations.bib"
+csl: "../data/ecology.csl"
+---
+
+\begin{center}
+{\LARGE Identifying future climate risks embedded in international seafood import portfolios}
+
+\vspace{1em}
+
+{\large Connor Quiroz, Jessica A. Gephart, and Juliano Palacios Abrantes}
+
+{\normalsize School of Aquatic and Fishery Sciences, Box 355020\\
+University of Washington, Seattle, WA, 98195-5020}
+\end{center}
+
+\vspace{2em}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Seafood, one of the most highly traded commodities, benefits diverse livelihoods and supports global nutrition and seafood security by supplying critical fatty acids, micronutrients, and animal proteins [@fao_state_2023] which creates sustainable, healthy diets [@koehn_role_2022], and increasing fish availability and access [@thilsted_sustaining_2016, @marin_does_2024]. 
+Seafood is highly-traded, with around ⅓ of fishery production exported and with seafood demand varying geographically, seafood trade and consumption are becoming increasingly globalized [@gephart_structure_2015]. 
+Seafood trade is especially important for buffering food insecurities within equatorial regions as they are subject to nutritional deficiencies and food vulnerabilities, and many countries rely on imports for large shares of their seafood consumption [@golden_aquatic_2021]. 
+Reliance on seafood imports, however, may introduce implications for the risk of countries’ imports; imports are critical for food security as food availability tends to be higher with imports (@subramaniam_imports_2024).
+
+Importing countries' seafood portfolios (i.e., quantity and diversity) are threatened by slow-moving climatic changes. 
+Global catch is projected to decline [@cheung_large-scale_2010, @golden_nutrition_2016], and climate change may increase constraints in seafood macro- and micronutrients [@elsler_seven_2024]. 
+Additionally moving into the future, species invasion may be the most intense around the arctic and southern oceans, limiting catch [@cheung_projecting_2009], having the potential to negatively affect lower income, climate vulnerable wild capture fisheries in equatorial regions [@tigchelaar_compound_2021]. 
+This also creates potential vulnerabilities for import dependent countries, as declines in partner countries’ exports can reduce importer’s national seafood supplies [@subramaniam_imports_2024]. 
+There are currently no risk evaluations on countries’ seafood imports.
+We pose the research question: What is the future climate risk embedded in countries’ seafood import portfolios?
+
+To answer this research question, We will apply the Intergovernmental Panel on Climate Change vulnerability formula to compare social-economic-environmental risk across countries: Vulnerability = (Exposure + Sensitivity) - Adaptive Capacity. 
+This framework has been used to identify fishery vulnerabilities at large scales [@ding_vulnerability_2017, @mamauag_framework_2013]. 
+Exposure measures a country’s level of stress, sensitivity measures a country’s reaction to a stress, and adaptive capacity measures a country’s ability to mitigate stressors (@cooper_climate_2002). 
+We are leveraging the new Aquatic Resource Trade in Species (ARTIS) database which has disaggregated global trade data by country of harvest, production method, and species, resulting in estimated consumption for over 2400 species, 193 countries, and 35 million bilateral trade records going back to 1996 as measures of sensitivity [@gephart_globalization_2024].
+We are also compiling social-economic variables from national data portals and future climatic variables as measures for adaptive capacity and exposure. We will present estimated national vulnerabilities of import portfolios to climate change, highlighting the regions with the highest vulnerabilities and the factors driving high vulnerability.
+We hypothesize that countries’ imports that are dependent on lower latitude countries while having a lower adaptive capacity will yield higher import portfolio risks (e.g., U.S with high adaptive capacity relying on imports from low latitude countries = lower risk; Liberia with low adaptive capacity relying … = higher risk).
+The results from this work highlight a key vulnerability in the ability of aquatic foods to contribute to nutrition security in the face of climate change and point to areas in need of adaptation strategies.
+
+# Methods
+
+## Exposure
+
+We define exposure as the magnitude to which a country is exposed to climate stress, which is presented as % change in catch.
+We know from @cheung_projecting_2009 that global catch across seafood is projected to decline, and we collected this data from SeaAroundUs to calculate for every taxa in ARTIS caught in a given exclusive economic zone (EEZ) their projected change in catch in 2030, 2050, and 2100.
+We obtained % change in catch measurements across shared socioeconomic pathways (SSPs) 128 and 585 to model different social-climate scenarios.
+Seafood caught in one EEZ country can be consumed in another country, and so we calculated countries’ total % change in catch by: (1) multiplying a product’s individual % change by their present live weight catch in tons by the percent live weight of a country's’ total consumed weight was; and (2) summing catch changes across taxa within a country.
+Countries with negative changes in catch will have more climate vulnerabilities within their seafood portfolios, whereas countries with positive changes in catch will have less risk.
+
+# Sensitivity
+
+We define sensitivity as a country’s magnitude for which it is affected by an exposure and we are quantifying that by their seafood consumption portfolios (i.e., quantity & diversity).
+Trustworthy vulnerability assessments on countries’ seafood portfolios requires reliable, high-resolution, international seafood species data, and this is an existing problem in ARTIS that we need to address.
+ARTIS contains taxa names from genus up to kingdom - 50% of countries in ARTIS reported 66% or less of their consumed seafood to genus, and only 50% of countries reported 54% or less to species level, highlighting discrepancies in the resolution at which countries report their consumed seafood (Figure 1).
+Sensitivity will be defined by a countries’ diversity, and quantity, but if we were to calculate the species diversity as is, then we would underestimate the diversity of some countries, producing untrustworthy risk assessments.
+By interpolating countries’ diversity to higher resolution taxa (e.g., family → genus), we will have greater data coverage to reliably calculate seafood diversity and quantity, and thereby assess countries’ social-economic consumption risks. The two required steps for interpolating data to higher resolutions is (1) estimating the diversity and (2) estimating the quantity.
+
+ARTIS taxa names are derived partly from Fishbase (FB) and Sealifebase (SLB), but FB and SLB also contain presence/absence species distributional data which we can use to estimate the diversity [@froese_fishbase_2024].
+FB and SLB contain global marine biodiversity data that covers more than 33,000 marine species compiled from  over 52,000 references in partnership with over 2,000 collaborators; their data defines country presence/absence for a particular species from scientific literature reviews and reports on species country distributions.
+For example, if Canada only reported ray-finned fishes, Actinopterygii (a class), were consumed but FB/SLB detected Pink salmon, Oncorhynchus gorbuscha (a species) present in Canada, we could then interpolate Canada’s classification from class to species level.
+We matched FB/SLB presence/absence data with ARTIS true species within each country to classify as present or absent.
+For all the higher-than-species taxa in ARTIS that were not matched to a species presence/absence, we matched the present species to their respective higher taxa names, and if the target higher-than-species names matched anything in the present taxa names for a given country, then it was marked as present.
+This method, however, produced six countries containing only absences and no presences; we wanted a higher coverage to maximize interpolations to higher taxonomic resolutions.
+
+ARTIS contains species that are important to ornamental trade [@gephart_globalization_2024], but FB/SLB contains commercially important species that ARTIS does not account for [@froese_fishbase_2024].
+By including FB/SLB species that are present within the list of countries that ARTIS has, we added an additional 2991 species to ARTIS’ consumed species. FB/SLB, however, only reports the genus and species.
+To estimate the family, order, class, phylum, and kingdom, we used “rgbif,” an r package connected to the Global Biodiversity Information Facility which contains references of scientific names at each taxonomic level, to match FB/SLB true species to the most commonly matched family, order, class, and kingdom.
+Recalculating presence/absence after adding the commercially important FB/SLB species to ARTIS, we reduced the amount of countries only containing absences to four countries.
+
+## Adaptive capacity
+
+We define adaptive capacity as a country’s social, economic, and governmental potential to mitigate seafood insecurities induced by climate stress. Adaptive capacity can be represented by four components: assets, social organization, learning, and flexibility [@cinner_exploring_2009].
+We collected variables to each of these four dimensions of adaptive capacity.
+We collected variables to represent each component, aiming to represent countries’ structure and effects needed to minimize climate stressors that could induce seafood insecurities in their nation (Table 1).
+
+Capturing a countries’ social, economic, and governmental potential to mitigate seafood insecurities through variables is complex and likely will not capture all the variability in a country, and it is important that these variables were not selected arbitrarily.
+Furthermore, what weight should each of these variables have within their respective components (i.e., components = assets, social organization, flexibility, learning), and what weight of importance should each component have on adaptive capacity (e.x., even importance, or more weight toward social organization)? 
+
+To address questions about variable and component importance, we performed a sensitivity analysis across two cases: (1) each variable within each component of adaptive capacity, and (2) each component within adaptive capacity.
+Using Dirichlet probability distributions, which produce proportions for k classes that always sum to 1, we created simulations for case one and case two, increasing the Dirichlet proportion of importance for one component.
+We stopped increasing component importance when the risk index across countries was significantly different from the null risk indexes, where the null risk index was calculated with equal importance across case one and case two.
+For variables that did not produce any statistically significant results with higher simulated importances, we removed them from analysis, and for adaptive capacity components with no significant differences in risk when increasing the importance, we kept at an even importance, 25% given there are four components.
+
+\begin{table}[ht]
+\centering
+\caption{Indicators used to represent components of adaptive capacity.}
+\label{tab:adaptive_capacity_indicators}
+% Use \small or \footnotesize if still too wide:
+\small
+% Define column layout: 
+%  - First two columns are left-aligned with natural width (l l).
+%  - Next two are X columns (adjustable) so they wrap within \textwidth.
+\begin{tabularx}{\textwidth}{@{}l l X X@{}}
+\toprule
+\textbf{Component} & \textbf{Interpretation} & \textbf{Variable} & \textbf{Source} \\
+\midrule
+\multicolumn{4}{@{}l}{\textbf{Assets}} \\
+\midrule
+& Economic strength & Gross Domestic Product (GDP) & World Bank \\
+& Physical infrastructure & \% population with access to sanitation & UNICEF \\
+& Ability to invest in food imports & Trade (\% of GDP per capita) & World Bank \\
+\midrule
+\multicolumn{4}{@{}l}{\textbf{Social organization}} \\
+\midrule
+& Overall quality of governance & Government Effectiveness: Percentile Rank & Worldwide Governance Indicators \\
+& Quality of policy implementation & Rule of law: Percentile Rank & Worldwide Governance Indicators \\
+& Overall quality of fisheries management & Food safety capacity & Food Systems Dashboard \\
+\midrule
+\multicolumn{4}{@{}l}{\textbf{Flexibility}} \\
+\midrule
+& Market access & Number of supermarkets per 100,000 population & Food Systems Dashboard \\
+& Livelihood diversity & Prop labor force & World Bank \\
+& Human development & Life expectancy at birth & United Nations Population Division \\
+\midrule
+\multicolumn{4}{@{}l}{\textbf{Learning}} \\
+\midrule
+& General education level & Average years of schooling & Our World in Data \\
+& Capital potential per capita & Human capital index & World Bank \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+# Results
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=4in]{../images/fig_one.jpg}
+\caption{Calculated future climate risk of countries per the vulnerability formula.}
+\end{figure}
+
+# Discussion
+
+* Explain data resolution issues - how parts of data only goes to X taxonomic resolution, and why we need equal resolution across countries to ensure trustworthy + robust analyses.
+
+<!-- * Applications of this data - gives us high resolution sourcing contributions to daily protein and food intake (fishery managers, food systems scientists) - cite @vonderschmidt_analysis_2024 -->
+<!-- * Explain differences in FBS datasets and whether they potentially alter interpretations of results (they potentially could and is nuanced) -->
+<!-- * Future directions: Look more into fixing differences between FBS datasets - this process will take careful curating. Look at other contributions to other nutritional components (e.g., fat supply quantity) -->
+<!-- * Sets up future studies to study the risk of countries that may be more foreign dependent on seafood for their protein supplies. -->
+
+# References
+
+::: {#refs}
+:::
