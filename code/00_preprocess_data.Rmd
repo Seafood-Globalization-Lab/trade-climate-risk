@@ -34,62 +34,64 @@ library(exploreARTIS)
 # Data Cleaning
 
 ```{r new preprocess future climate data}
-file_names <- list.files(path = "../data/exposure/mcp_per_change/mcp_per_change/", pattern = "\\.csv", full.names = TRUE)
+# file_names <- list.files(path = "../data/exposure/mcp_per_change/mcp_per_change/", pattern = "\\.csv", full.names = TRUE)
+# 
+# # Obtain species lookup key (will be used in loop join)
+# species_names <- fread("../data/exposure/dbem_spp_list.csv")
+# 
+# # initiate empty df
+# df <- data.frame()
+# 
+# for (i in 1:length(file_names)) {
+#   # Read in i'th species file in loop
+#   df_i <- fread(file_names[i])
+#   
+#   df_i <- left_join(df_i, species_names, by = "taxon_key")
+#   
+#   # Select only certain variables for certain years and pivot wider
+#   df_i <- df_i %>%
+#     mutate(taxon_name = str_to_lower(taxon_name)) %>%
+#     select(taxon_name, eez_name, ssp, per_change) %>%
+#     pivot_wider(names_from = ssp, values_from = per_change)
+#   
+#   # Combine all species observations into one file
+#   df <- df %>%
+#     bind_rows(df_i)
+# }
+# 
+# # Obtain previous state on dataframe (to get unmatched)
+# df_preprocessed <- df
+# 
+# # Convert eez variable countries to iso3c codes
+# for (i in 1:length(df$eez_name)) {
+#   df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
+# }
+# 
+# # Rename country variable so it can be joined
+# df <- df %>%
+#   rename(eez_iso3c = "eez_name",
+#          sciname = "taxon_name")
+# 
+# # Write joined future cimate data to .csv
+# write_csv(df, "../output/future_climate_joined.csv")
+# 
+# # # See how many countries were not matches
+# sum(is.na(df$eez_iso3c))
+# 
+# # # Number of countries that properly got matched
+# length(unique(df$eez_iso3c))
+# 
+# # # Unmatched countries via countrycode
+# unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
+# 
+# # # Only keep rows in preprocessed dataset that are unmatched countries
+# df_preprocessed <- df_preprocessed %>%
+#   filter(eez_name %in% unmatched_countries)
+# 
+# # Territories that were not matched via countrycode (Tokelau & Svalbard Isl.)
+# df_preprocessed %>% distinct(eez_name)
 
-# Obtain species lookup key (will be used in loop join)
-species_names <- fread("../data/exposure/dbem_spp_list.csv")
-
-# initiate empty df
-df <- data.frame()
-
-for (i in 1:length(file_names)) {
-  # Read in i'th species file in loop
-  df_i <- fread(file_names[i])
-  
-  df_i <- left_join(df_i, species_names, by = "taxon_key")
-  
-  # Select only certain variables for certain years and pivot wider
-  df_i <- df_i %>%
-    mutate(taxon_name = str_to_lower(taxon_name)) %>%
-    select(taxon_name, eez_name, ssp, per_change) %>%
-    pivot_wider(names_from = ssp, values_from = per_change)
-  
-  # Combine all species observations into one file
-  df <- df %>%
-    bind_rows(df_i)
-}
-
-# Obtain previous state on dataframe (to get unmatched)
-df_preprocessed <- df
-
-# Convert eez variable countries to iso3c codes
-for (i in 1:length(df$eez_name)) {
-  df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
-}
-
-# Rename country variable so it can be joined
-df <- df %>%
-  rename(eez_iso3c = "eez_name",
-         sciname = "taxon_name")
-
-# Write joined future cimate data to .csv
-write_csv(df, "../output/future_climate_joined.csv")
-
-# # See how many countries were not matches
-sum(is.na(df$eez_iso3c))
-
-# # Number of countries that properly got matched
-length(unique(df$eez_iso3c))
-
-# # Unmatched countries via countrycode
-unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
-
-# # Only keep rows in preprocessed dataset that are unmatched countries
-df_preprocessed <- df_preprocessed %>%
-  filter(eez_name %in% unmatched_countries)
-
-# Territories that were not matched via countrycode (Tokelau & Svalbard Isl.)
-df_preprocessed %>% distinct(eez_name)
+####################################
 
 # # Get country names out of parenthesis with string detects
 # for (i in seq_along(df_preprocessed$eez_name)) {
