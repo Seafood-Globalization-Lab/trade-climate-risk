@@ -7,6 +7,34 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+# General data cleaning + visualization + analysis packages
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+
+# Map creation
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+
+# Load in packages needed for ARTIS
+library(devtools)
+library(tidytext)
+# devtools::install_github("davidsjoberg/ggsankey")
+library(ggsankey)
+# devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
+library(exploreARTIS)
+
+# For Packages for fishbase
+# remotes::install_github("cboettig/duckdbfs", force = TRUE)
+# remotes::install_github("ropensci/rfishbase")
+library(duckdbfs)
+library(rfishbase)
 ```
 
 ```{r load in functions}
