@@ -154,11 +154,6 @@ For variables that did not produce any statistically significant results with hi
 
 * Explain data resolution issues - how parts of data only goes to X taxonomic resolution, and why we need equal resolution across countries to ensure trustworthy + robust analyses.
 
-<!-- * Applications of this data - gives us high resolution sourcing contributions to daily protein and food intake (fishery managers, food systems scientists) - cite @vonderschmidt_analysis_2024 -->
-<!-- * Explain differences in FBS datasets and whether they potentially alter interpretations of results (they potentially could and is nuanced) -->
-<!-- * Future directions: Look more into fixing differences between FBS datasets - this process will take careful curating. Look at other contributions to other nutritional components (e.g., fat supply quantity) -->
-<!-- * Sets up future studies to study the risk of countries that may be more foreign dependent on seafood for their protein supplies. -->
-
 # References
 
 ::: {#refs}
