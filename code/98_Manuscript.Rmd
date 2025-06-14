@@ -103,6 +103,8 @@ Using Dirichlet probability distributions, which produce proportions for k class
 We stopped increasing component importance when the risk index across countries was significantly different from the null risk indexes, where the null risk index was calculated with equal importance across case one and case two.
 For variables that did not produce any statistically significant results with higher simulated importances, we removed them from analysis, and for adaptive capacity components with no significant differences in risk when increasing the importance, we kept at an even importance, 25% given there are four components.
 
+* Adjust this text so that it talks about kendall-tao correlation and change in rank distributions and not p-values
+
 \begin{table}[ht]
 \centering
 \caption{Indicators used to represent components of adaptive capacity.}
