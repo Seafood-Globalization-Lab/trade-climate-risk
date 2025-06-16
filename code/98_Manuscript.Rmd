@@ -152,6 +152,12 @@ For variables that did not produce any statistically significant results with hi
 \caption{Calculated future climate risk of countries per the vulnerability formula.}
 \end{figure}
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=4in]{../images/fig_two.jpg}
+\caption{Scatterplot distribution of risk changes with it's contributing factors (A = exposure, B = sensitivity, C = adaptive capacity) are predictors.}
+\end{figure}
+
 # Discussion
 
 * Explain data resolution issues - how parts of data only goes to X taxonomic resolution, and why we need equal resolution across countries to ensure trustworthy + robust analyses.
