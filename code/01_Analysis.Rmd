@@ -113,28 +113,21 @@ risk <- risk %>%
   add_region(col = "consumer_iso3c", region.col.name = "region") %>%
   arrange(region, .after = "consumer_iso3c")
 
-# How does the rank order change for adaptive capacity
-# Calculate rank order 
-
-# Map vulnerability
-(risk_map <- risk %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-create_map(fill = "vulnerability") +
-  labs(fill = "Vulnerability score"))
-
 # Look at correlations between vulnerability and E + S + AC
 pairs(risk[,2:5])
-cor(risk[,2:5])
+cor_vals <- cor(risk[,2:5])
 
+
+# Save correlation values to RDS
+saveRDS(cor_vals, "../output/cor_vals.rds")
+
+# Look at the distribution of the pct change in stocks globally by shared socioeconomic pathway.
 e_s_ac_data %>%
   ggplot(aes(x = pct_change)) +
   geom_histogram(color = "black") +
   facet_wrap(~ scenario) +
   theme_cowplot() +
   labs(x = "% Change in stock", y = "# countries")
-
-# Save plot
-ggsave("../images/fig_one.jpg", plot = risk_map, device = "jpeg", width = 4, height = 3, units = "in")
 
 # Who sources from countries that are more or less vulnerable
 # consumption %>%
@@ -153,13 +146,55 @@ ggsave("../images/fig_one.jpg", plot = risk_map, device = "jpeg", width = 4, hei
 #         legend.text = element_blank())
 ```
 
+```{r figure one}
+A <- risk %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+create_map(fill = "exposure") +
+  labs(fill = "Exposure", tag = "A") + 
+  theme(plot.margin = unit(c(0,0,0,0), "cm"),
+        plot.tag = element_text(face = "bold"))
+
+B <- risk %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+create_map(fill = "sensitivity") +
+  labs(fill = "Sensitivity", tag = "B") + 
+  theme(plot.margin = unit(c(0,0,0,0), "cm"),
+        plot.tag = element_text(face = "bold"))
+
+C <- risk %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+create_map(fill = "adaptive_capacity") +
+  labs(fill = "Adaptive capacity", tag = "C") + 
+  theme(plot.margin = unit(c(0,0,0,0), "cm"),
+        plot.tag = element_text(face = "bold"))
+
+comb_1 <- plot_grid(A,B)
+fig_one <- plot_grid(comb_1,C, ncol = 1)
+
+# Save plot
+ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
+```
+
+
 ```{r figure two}
+# Map vulnerability
+(fig_two <- risk %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+create_map(fill = "vulnerability") +
+  labs(fill = "Vulnerability score"))
+
+# Save plot
+ggsave("../images/fig_two.jpg", plot = fig_two, device = "jpeg", width = 4, height = 3, units = "in")
+```
+
+
+```{r figure three}
 A <- risk %>%
   ggplot(aes(x = exposure, y = vulnerability, color = region)) +
   geom_point() +
   theme_cowplot() +
   scale_color_manual(values = artis_palette(6)) +
-  labs(x = "Exposure", y = "Risk", color = "") +
+  labs(x = "Exposure", y = "Risk", color = "", tag = "A") +
   theme(legend.position = "bottom")
 
 # Get legend object
@@ -199,11 +234,12 @@ C <- risk %>%
 
 comb_1 <- plot_grid(A, B, align = "v")
 comb_2 <- plot_grid(C,legend)
-fig_two <- plot_grid(comb_1, comb_2, ncol = 1)
+fig_three <- plot_grid(comb_1, comb_2, ncol = 1)
 
 # Save plot
-ggsave("../images/fig_two.jpg", plot = fig_two, device = "jpeg", width = 6, height = 4, units = "in")
+ggsave("../images/fig_three.jpg", plot = fig_three, device = "jpeg", width = 6, height = 4, units = "in")
 ```
+
 
 
 ```{r prepare e/s/ac data for sensitivity analysis}

@@ -35,6 +35,7 @@ University of Washington, Seattle, WA, 98195-5020}
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+cor_vals <- readRDS("../output/cor_vals.rds")
 ```
 
 # Introduction
@@ -149,13 +150,19 @@ For variables that did not produce any statistically significant results with hi
 \begin{figure}[H]
 \centering
 \includegraphics[width=4in]{../images/fig_one.jpg}
-\caption{Calculated future climate risk of countries per the vulnerability formula.}
+\caption{Calculated exposure (A), sensitivity (B), and adaptice capacity (C) values with respect to each country.}
 \end{figure}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=4in]{../images/fig_two.jpg}
-\caption{Scatterplot distribution of risk changes with it's contributing factors (A = exposure, B = sensitivity, C = adaptive capacity) are predictors.}
+\caption{Calculated future climate risk of countries per the vulnerability formula.}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=4in]{../images/fig_three.jpg}
+\caption{Scatterplot distribution of risk changes with it's contributing factors (A = exposure, B = sensitivity, C = adaptive capacity) are predictors. Correlation between risk and exposure: `r round(cor_vals[1,4], 3)`; risk and sensitivity: `r round(cor_vals[2,4], 3)`; risk and adaptive capacity: `r round(cor_vals[3,4], 3)`.}
 \end{figure}
 
 # Discussion
