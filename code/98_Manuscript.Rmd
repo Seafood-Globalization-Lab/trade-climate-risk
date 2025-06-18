@@ -167,7 +167,17 @@ For variables that did not produce any statistically significant results with hi
 
 # Discussion
 
+With the risk index, we provide new insights into countries’ future climate risk for their seafood consumption, meaning how well will countries be able to adjust to future food availability with their current social-economic structures.
+While countries may have high adaptive capacities (Figure 1), their high reliance on other countries for seafood as well as high reliance on seafood for food nutrition can leave them vulnerable to future seafood shortages (Figure 2), particularly for some European countries. 
+These estimates are also dedicated on countries’ current social-economic status - an improvement to these governance contexts could help reduce climate caused food risks if the reliance on seafood and other countries is balanced.
+
 * Explain data resolution issues - how parts of data only goes to X taxonomic resolution, and why we need equal resolution across countries to ensure trustworthy + robust analyses.
+
+These risk estimates, while they have some statistical nuances, still provide a high level understanding for the prospects of seafood consumption risk.
+Future research should explore how to disaggregate the weights in higher taxonomic reported groups (e.g., actinopterygii) to more fine resolutions.
+With this information, we could more accurately gauge which seafood products are more or less sustainable.
+Future research should also consider how the climate and economy interact to either buffer or exacerbate impacts on seafood security, allowing us to identify how we could improve prospects for food security.
+By having a balance between seafood and terrestrial consumption and between foreign and domestic consumption, we can buffer ourselves from climate induced problems that may arise, as well as improve our nutritional health [@simpson_putting_2015, @fern_nutrient_2015, @diab_heart-healthy_2023].
 
 # References
 
