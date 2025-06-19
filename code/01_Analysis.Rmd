@@ -35,15 +35,16 @@ library(exploreARTIS)
 ocean <- st_polygon(list(cbind(c(seq(-180, 179, len = 100), rep(180, 100), 
                         seq(179, -180, len = 100), rep(-180, 100)),
                       c(rep(-90, 100), seq(-89, 89, len = 100),
-                        rep(90, 100), seq(89, -90, len = 100))))) |>
-  st_sfc(crs = "WGS84") |>
+                        rep(90, 100), seq(89, -90, len = 100))))) %>%
+  st_sfc(crs = "WGS84") %>%
   st_as_sf()
 
-create_map <- function(data, fill = "prop_missing") {
+# Map creation function
+create_map <- function(data, fill = "prop_missing", country.col.name) {
   world_map <- ne_countries(scale = "medium", returnclass = "sf")
 
 world_map <- world_map %>%
-  left_join(data, by = c("iso_a3" = "eez_iso3c"))
+  left_join(data, by = c("iso_a3" = country.col.name))
   
   world_map %>%
 ggplot() +
@@ -148,22 +149,19 @@ e_s_ac_data %>%
 
 ```{r figure one}
 A <- risk %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-create_map(fill = "exposure") +
+create_map(fill = "exposure", country.col.name = "consumer_iso3c") +
   labs(fill = "Exposure", tag = "A") + 
   theme(plot.margin = unit(c(0,0,0,0), "cm"),
         plot.tag = element_text(face = "bold"))
 
 B <- risk %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-create_map(fill = "sensitivity") +
+create_map(fill = "sensitivity", country.col.name = "consumer_iso3c")+
   labs(fill = "Sensitivity", tag = "B") + 
   theme(plot.margin = unit(c(0,0,0,0), "cm"),
         plot.tag = element_text(face = "bold"))
 
 C <- risk %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-create_map(fill = "adaptive_capacity") +
+  create_map(fill = "adaptive_capacity", country.col.name = "consumer_iso3c") +
   labs(fill = "Adaptive capacity", tag = "C") + 
   theme(plot.margin = unit(c(0,0,0,0), "cm"),
         plot.tag = element_text(face = "bold"))
@@ -173,14 +171,15 @@ fig_one <- plot_grid(comb_1,C, ncol = 1)
 
 # Save plot
 ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
+
+risk %>% select(consumer_iso3c, exposure)
 ```
 
 
 ```{r figure two}
 # Map vulnerability
 (fig_two <- risk %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-create_map(fill = "vulnerability") +
+  create_map(fill = "vulnerability", country.col.name = "consumer_iso3c") +
   labs(fill = "Vulnerability score"))
 
 # Save plot
