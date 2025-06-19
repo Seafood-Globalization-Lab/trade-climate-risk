@@ -171,8 +171,6 @@ fig_one <- plot_grid(comb_1,C, ncol = 1)
 
 # Save plot
 ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
-
-risk %>% select(consumer_iso3c, exposure)
 ```
 
 
