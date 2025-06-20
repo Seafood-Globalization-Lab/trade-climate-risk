@@ -40,7 +40,7 @@ ocean <- st_polygon(list(cbind(c(seq(-180, 179, len = 100), rep(180, 100),
   st_as_sf()
 
 # Map creation function
-create_map <- function(data, fill = "prop_missing", country.col.name) {
+create_map <- function(data = data, fill = "prop_missing", country.col.name) {
   world_map <- ne_countries(scale = "medium", returnclass = "sf")
 
 world_map <- world_map %>%
