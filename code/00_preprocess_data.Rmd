@@ -234,6 +234,13 @@ rm(consumption_sciname, sciname_taxa, consumption,
    averages_order, averages_phylum, averages_subfamily,
    df, lookup_table, sciname, sciname_taxa, test_data)
 gc() # Garbage collection to clean up storage
+
+# Find the sum of the interpolated scinames' live_weights
+interpolated_future_data %>% 
+  filter(!str_detect(sciname_hs_modified, " "), !is.na(ssp126)) %>%
+  group_by(sciname_hs_modified) %>% 
+  summarize(sum_live_weight_t = sum(live_weight_t)) %>%
+  View()
 ```
 
 
