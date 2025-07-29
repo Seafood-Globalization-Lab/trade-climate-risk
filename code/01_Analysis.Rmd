@@ -173,6 +173,57 @@ fig_one <- plot_grid(comb_1,C, ncol = 1)
 ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
 ```
 
+```{r}
+remotes::install_github(repo = "lydialucchesi/Vizumap", build_vignettes = TRUE, force = TRUE)
+library(knitr)
+library(Vizumap)
+library(rnaturalearth)
+library(sf)
+library(dplyr)
+
+# Step 1: Get world shapefile
+world_map <- ne_countries(scale = "medium", returnclass = "sf") %>%
+  select(iso_a3, geometry)
+
+# Step 2: Merge your risk data to the shapefile
+risk_map <- world_map %>%
+  left_join(risk, by = c("iso_a3" = "consumer_iso3c"))
+
+# Step 3: Drop geometry to prepare bivariate input
+risk_df <- st_drop_geometry(risk_map) %>%
+  filter(!is.na(exposure), !is.na(sensitivity))
+
+# Step 4: Create Vizumap bivariate data object
+risk_uv <- read.uv(data = risk_df, estimate = "exposure", error = "sensitivity")
+
+# Step 5: Build color palette
+risk_palette <- build_palette(
+  name = "usr",
+  colrange = list(
+    colour = c("#ff9d00", "#0238FF"),  # light blue → dark blue
+    difC = c(4, 4)
+  )
+)
+
+# Step 6: Build bivariate map and legend
+risk_biv_map <- build_bmap(
+  data = risk_uv,
+  geoData = risk_map,
+  id = "iso_a3",
+  palette = risk_palette,
+  terciles = TRUE
+)
+
+# Build the key first
+risk_biv_key <- build_bkey(
+  data = risk_uv,
+  palette = risk_palette,
+  terciles = TRUE
+)
+
+attach_key(map = risk_biv_map, mapkey = risk_biv_key)
+```
+
 
 ```{r figure two}
 # Map vulnerability
