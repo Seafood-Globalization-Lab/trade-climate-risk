@@ -101,8 +101,7 @@ risk <- left_join(e_s_ac_data %>% filter(scenario == "ssp126"), adaptive_capacit
                   foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
   group_by(consumer_iso3c) %>%
   mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
-         foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
-         sensitivity = sum(aa_reliance_pct_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+         sensitivity = aa_reliance_pct_scaled) %>%
   filter(!is.na(foreign_dependency_scaled),
                 !is.na(aa_reliance_pct_scaled)) %>%
   rename(exposure = "pct_change_scaled") %>%
@@ -174,7 +173,7 @@ ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, heig
 ```
 
 ```{r}
-remotes::install_github(repo = "lydialucchesi/Vizumap", build_vignettes = TRUE, force = TRUE)
+# remotes::install_github(repo = "lydialucchesi/Vizumap", build_vignettes = TRUE, force = TRUE)
 library(knitr)
 library(Vizumap)
 library(rnaturalearth)
