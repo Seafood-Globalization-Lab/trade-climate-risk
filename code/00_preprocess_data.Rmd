@@ -122,7 +122,11 @@ library(exploreARTIS)
 
 ```{r data cleaning for hdi + consumption data}
 # Read in cosnumption data
-consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet")
+consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet") %>%
+  mutate(sciname_hs_modified = case_when(
+    is.na(sciname_hs_modified) ~ sciname,
+    TRUE ~ sciname_hs_modified
+  )) # Get rid of NA scinames
 
 # Read in sciname data (for joining to scinames of future climate)
 sciname <- read_csv("../data/sciname.csv")
@@ -237,10 +241,30 @@ gc() # Garbage collection to clean up storage
 
 # Find the sum of the interpolated scinames' live_weights
 interpolated_future_data %>% 
-  filter(!str_detect(sciname_hs_modified, " "), !is.na(ssp126)) %>%
-  group_by(sciname_hs_modified) %>% 
+  filter(!is.na(ssp126)) %>% distinct(sciname_hs_modified)
+
+
+# Just Juliano's data
+interpolated_future_data %>% 
+  filter(str_detect(sciname_hs_modified, " "), !is.na(ssp126)) %>% 
+  summarize(sum_live_weight_t = sum(live_weight_t)) 
+
+
+# No values
+interpolated_future_data %>% 
+  filter(is.na(ssp126)) %>% 
+  group_by(sciname_hs_modified, eez_iso3c) %>% 
   summarize(sum_live_weight_t = sum(live_weight_t)) %>%
-  View()
+  arrange(-sum_live_weight_t)
+
+unique(df1$sciname) %>% length()
+
+consumption_future %>% distinct(sciname_hs_modified)
+
+consumption_future %>%
+  left_join(sciname, by = c("sciname_hs_modfied" = "sciname")) %>%
+  filter(class == "actinopterygii",
+         is.na(ssp126)) 
 ```
 
 
