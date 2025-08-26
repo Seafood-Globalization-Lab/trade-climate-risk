@@ -261,10 +261,10 @@ unique(df1$sciname) %>% length()
 
 consumption_future %>% distinct(sciname_hs_modified)
 
-consumption_future %>%
-  left_join(sciname, by = c("sciname_hs_modfied" = "sciname")) %>%
-  filter(class == "actinopterygii",
-         is.na(ssp126)) 
+# consumption_future %>%
+#   left_join(sciname, by = c("sciname_hs_modfied" = "sciname")) %>%
+#   filter(class == "actinopterygii",
+#          is.na(ssp126)) 
 ```
 
 
@@ -284,11 +284,16 @@ consumption_future <- interpolated_future_data %>%
 #Add in variable later
 # consumer_foreign_dependencies
 
+
+# NOTE: Commenting out first filter will give the entire consumption portfolio. Commenting out the second filter will give only imports.
+
 # Get % change in stock composition by country
 consumer_stock_change_pre <- consumption_future %>% 
   filter(consumer_iso3c != producer_iso3c, # Only include importing countries; drop NAs
          !is.na(live_weight_t),
          !is.na(future_change_catch)) %>%
+  # filter(!is.na(live_weight_t),
+  #        !is.na(future_change_catch)) %>%
   mutate(future_change_catch = case_when( # Convert percentage to proportion
     future_change_catch > 0 ~ (future_change_catch / 100) + 1,
     future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
@@ -640,7 +645,7 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(consumer_stock_change) # Add in exposure data
 
 # Save joined data to output folder
-write_parquet(e_s_ac_data, "../output/e_s_ac_data.parquet")
+write_parquet(e_s_ac_data, "../output/e_s_ac_data_entire_portfolio.parquet")
 
 # Remove previous objects to keep data usage small
 rm(a, b, c, d, e, f, h, i, j, k, aa_reliance, ac_coverage,
