@@ -69,8 +69,10 @@ e_s_ac_data_entire_portfolio <- read_parquet("../output/e_s_ac_data_entire_portf
 # Calculate risk
 source("../R/calculate_risk.R")
 
-risk <- calculate_risk(e_s_ac_data)
-risk <- calculate_risk(e_s_ac_data_entire_portfolio)
+risk_foreign_imports <- calculate_risk(e_s_ac_data) %>%
+  mutate(coverage = "foreign imports")
+risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio) %>%
+  mutate(coverage = "entire portfolio")
 
 # Look at correlations between vulnerability and E + S + AC
 pairs(risk[,2:5])
@@ -89,159 +91,56 @@ e_s_ac_data %>%
   labs(x = "% Change in stock", y = "# countries")
 
 # Who sources from countries that are more or less vulnerable
-# consumption %>%
-#   filter(year == 2019) %>%
-#   left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
-#   rename(producer_risk = "vulnerability") %>%
-#   filter(producer_iso3c != consumer_iso3c) %>%
-#   mutate(risk_sum = live_weight_t * producer_risk) %>%
-#   filter(!is.na(producer_risk)) %>%
-#   group_by(consumer_iso3c) %>%
-#   summarize(total_risk = -log(-sum(risk_sum))) %>%
-#   rename(eez_iso3c = "consumer_iso3c") %>%
-#   create_map(fill = "total_risk") +
-#   labs(fill = "Sourcing riskiness from foreign imports") +
-#   theme(legend.ticks = element_blank(),
-#         legend.text = element_blank())
+consumption %>%
+  filter(year == 2019) %>%
+  left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+  rename(producer_risk = "vulnerability") %>%
+  filter(producer_iso3c != consumer_iso3c) %>%
+  mutate(risk_sum = live_weight_t * producer_risk) %>%
+  filter(!is.na(producer_risk)) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(total_risk = -log(-sum(risk_sum))) %>%
+  rename(eez_iso3c = "consumer_iso3c") %>%
+  create_map(fill = "total_risk") +
+  labs(fill = "Sourcing riskiness from foreign imports") +
+  theme(legend.ticks = element_blank(),
+        legend.text = element_blank())
 ```
 
-```{r figure one}
-A <- risk %>%
-create_map(fill = "exposure", country.col.name = "consumer_iso3c") +
-  labs(fill = "Exposure", tag = "A") + 
-  theme(plot.margin = unit(c(0,0,0,0), "cm"),
-        plot.tag = element_text(face = "bold"))
-
-B <- risk %>%
-create_map(fill = "sensitivity", country.col.name = "consumer_iso3c")+
-  labs(fill = "Sensitivity", tag = "B") + 
-  theme(plot.margin = unit(c(0,0,0,0), "cm"),
-        plot.tag = element_text(face = "bold"))
-
-C <- risk %>%
-  create_map(fill = "adaptive_capacity", country.col.name = "consumer_iso3c") +
-  labs(fill = "Adaptive capacity", tag = "C") + 
-  theme(plot.margin = unit(c(0,0,0,0), "cm"),
-        plot.tag = element_text(face = "bold"))
-
-comb_1 <- plot_grid(A,B)
-(fig_one <- plot_grid(comb_1,C, ncol = 1))
-
-# Save plot
-ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
-```
-
-```{r}
-# remotes::install_github(repo = "lydialucchesi/Vizumap", build_vignettes = TRUE, force = TRUE)
-library(knitr)
-library(Vizumap)
-library(rnaturalearth)
-library(sf)
-library(dplyr)
-
-# Step 1: Get world shapefile
-world_map <- ne_countries(scale = "medium", returnclass = "sf") %>%
-  select(iso_a3, geometry)
-
-# Step 2: Merge your risk data to the shapefile
-risk_map <- world_map %>%
-  left_join(risk, by = c("iso_a3" = "consumer_iso3c"))
-
-# Step 3: Drop geometry to prepare bivariate input
-risk_df <- st_drop_geometry(risk_map) %>%
-  filter(!is.na(exposure), !is.na(sensitivity))
-
-# Step 4: Create Vizumap bivariate data object
-risk_uv <- read.uv(data = risk_df, estimate = "exposure", error = "sensitivity")
-
-# Step 5: Build color palette
-risk_palette <- build_palette(
-  name = "usr",
-  colrange = list(
-    colour = c("#ff9d00", "#0238FF"),  # light blue → dark blue
-    difC = c(4, 4)
-  )
-)
-
-# Step 6: Build bivariate map and legend
-risk_biv_map <- build_bmap(
-  data = risk_uv,
-  geoData = risk_map,
-  id = "iso_a3",
-  palette = risk_palette,
-  terciles = TRUE
-)
-
-# Build the key first
-risk_biv_key <- build_bkey(
-  data = risk_uv,
-  palette = risk_palette,
-  terciles = TRUE
-)
-
-attach_key(map = risk_biv_map, mapkey = risk_biv_key)
+```{r how much risk is coming from foreign and domestic sources?}
+risk_comparison  <- bind_rows(risk_foreign_imports, risk_overall) %>%
+  # Keep only the columns you need for the comparison
+  select(consumer_iso3c, region, coverage, vulnerability) %>%
+  pivot_wider(
+    names_from = coverage, 
+    values_from = vulnerability
+  ) %>%
+  # Clean up column names (replace spaces/special chars if needed)
+  rename(
+    foreign_imports_vuln = `foreign imports`,
+    entire_portfolio_vuln = `entire portfolio`
+  ) %>%
+  mutate(foreign_imports_vuln = abs(foreign_imports_vuln),
+         entire_portfolio_vuln = abs(entire_portfolio_vuln
+)) %>%
+  # Calculate foreign contribution metrics
+  mutate(
+    # What percentage of total vulnerability comes from foreign imports
+    foreign_contribution_pct = (foreign_imports_vuln / entire_portfolio_vuln) * 100,
+    
+    # Difference between foreign and total vulnerability  
+    vulnerability_difference = foreign_imports_vuln - entire_portfolio_vuln,
+    
+    # How much does domestic production reduce vulnerability?
+    domestic_buffer = entire_portfolio_vuln - foreign_imports_vuln
+  ) %>%
+  # Remove rows where we don't have both measures
+  filter(!is.na(foreign_imports_vuln), !is.na(entire_portfolio_vuln)) %>%
+  arrange(-foreign_contribution_pct)
 ```
 
 
-```{r figure two}
-# Map vulnerability
-(fig_two <- risk %>%
-  create_map(fill = "vulnerability", country.col.name = "consumer_iso3c") +
-  labs(fill = "Vulnerability score"))
-
-# Save plot
-ggsave("../images/fig_two.jpg", plot = fig_two, device = "jpeg", width = 4, height = 3, units = "in")
+```{r run sensitivity analysis}
+source("../R/sensitivity_analysis")
 ```
 
-
-```{r figure three}
-A <- risk %>%
-  ggplot(aes(x = exposure, y = vulnerability, color = region)) +
-  geom_point() +
-  theme_cowplot() +
-  scale_color_manual(values = artis_palette(6)) +
-  labs(x = "Exposure", y = "Risk", color = "", tag = "A") +
-  theme(legend.position = "bottom")
-
-# Get legend object
-legend <- get_legend(A + theme(
-    legend.position = "right",               # default or wherever you like
-    legend.key.size = unit(0.4, "cm"),       # shrink legend keys
-    legend.text = element_text(size = 8),    # smaller text
-    legend.title = element_text(size = 9),   # adjust title size
-    legend.spacing.y = unit(0.1, "cm"),      # less vertical spacing between items
-    legend.margin = margin(t = 2, r = 2, b = 2, l = 2)
-  ))
-
-legend <- ggdraw() +
-  draw_grob(legend, x = 0.5, y = 0.5, hjust = 0.5, vjust = 0.5)
-
-# Remove legend
-A <- A +
-  guides(color = "none")
-
-B <- risk %>%
-  ggplot(aes(x = sensitivity, y = vulnerability, color = region)) +
-  geom_point() +
-  theme_cowplot() +
-  scale_color_manual(values = artis_palette(6)) +
-  labs(x = "Sensitivity", y = "Risk", tag = "B") +
-  guides(color = "none")
-
-
-
-C <- risk %>%
-  ggplot(aes(x = adaptive_capacity, y = vulnerability, color = region)) +
-  geom_point() +
-  theme_cowplot() +
-  scale_color_manual(values = artis_palette(6)) +
-  labs(x = "Adaptive capacity", y = "Risk", tag = "C") +
-  guides(color = "none", tag = "C")
-
-comb_1 <- plot_grid(A, B, align = "v")
-comb_2 <- plot_grid(C,legend)
-fig_three <- plot_grid(comb_1, comb_2, ncol = 1)
-
-# Save plot
-ggsave("../images/fig_three.jpg", plot = fig_three, device = "jpeg", width = 6, height = 4, units = "in")
-```

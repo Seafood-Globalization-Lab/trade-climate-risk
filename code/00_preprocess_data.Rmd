@@ -316,6 +316,46 @@ rm(df1, interpolated_future_data, consumer_stock_change_pre)
 gc() # Garbage collection to clean up storage
 ```
 
+```{r delete}
+# test_country <- countries_with_both$consumer_iso3c[1]
+# test_scenario <- countries_with_both$scenario[1]
+# 
+# # Run your exact pipeline on this one country - with domestic
+# with_domestic_test <- consumption_future %>% 
+#   filter(consumer_iso3c == test_country, scenario == test_scenario,
+#          !is.na(live_weight_t), !is.na(future_change_catch)) %>%
+#   mutate(future_change_catch = case_when(
+#     future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+#     future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
+#     future_change_catch == 0 ~ 1)) %>%
+#   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+#   group_by(consumer_iso3c, scenario) %>%
+#   summarize(change_in_stock = sum(change_in_stock),
+#             live_weight_t = sum(live_weight_t), .groups = 'drop')
+# 
+# # Run pipeline - imports only  
+# imports_only_test <- consumption_future %>% 
+#   filter(consumer_iso3c == test_country, scenario == test_scenario,
+#          consumer_iso3c != producer_iso3c,
+#          !is.na(live_weight_t), !is.na(future_change_catch)) %>%
+#   mutate(future_change_catch = case_when(
+#     future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+#     future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
+#     future_change_catch == 0 ~ 1)) %>%
+#   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+#   group_by(consumer_iso3c, scenario) %>%
+#   summarize(change_in_stock = sum(change_in_stock),
+#             live_weight_t = sum(live_weight_t), .groups = 'drop')
+# 
+# print("With domestic:")
+# print(with_domestic_test)
+# print("Imports only:")
+# print(imports_only_test)
+# print("Difference in live_weight_t:")
+# print(with_domestic_test$live_weight_t - imports_only_test$live_weight_t)
+```
+
+
 ```{r add in sensitivity data}
 # Read in supply importance data
 supply_importance <- read_csv("../data/sensitivity/supply_importance.csv")
@@ -645,7 +685,8 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(consumer_stock_change) # Add in exposure data
 
 # Save joined data to output folder
-write_parquet(e_s_ac_data, "../output/e_s_ac_data_entire_portfolio.parquet")
+write_parquet(e_s_ac_data, "../output/e_s_ac_data.parquet")
+# write_parquet(e_s_ac_data, "../output/e_s_ac_data_entire_portfolio.parquet")
 
 # Remove previous objects to keep data usage small
 rm(a, b, c, d, e, f, h, i, j, k, aa_reliance, ac_coverage,

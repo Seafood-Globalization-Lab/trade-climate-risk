@@ -1261,3 +1261,633 @@ consumption_sciname %>% ungroup() %>% filter(eez_iso3c == "USA") %>%
   arrange(num_species) %>%
     filter(is.na(species) & count(., class) == 1)
 ```
+
+
+```{r iterative process for checking diversity across taxonomic levels (e.g., genus, family, etc.)}
+for (i in levels) {
+  # Shannon diversity of countries' imports
+  con_iteration <- consumption_sciname %>%
+    filter(year == 2019 &
+             consumer_iso3c != producer_iso3c & taxa_level == i) %>%
+    group_by(consumer_iso3c, sciname) %>%
+    summarize(genus_total = sum(live_weight_t)) %>%
+    group_by(consumer_iso3c) %>%
+    mutate(genus_total_country = sum(genus_total)) %>%
+    ungroup() %>%
+    mutate(pi = genus_total / genus_total_country,
+           pi_lnpi = pi * log(pi)) %>%
+    group_by(consumer_iso3c) %>%
+    summarize(shannon_custom = -sum(pi_lnpi))
+  
+# Create plot
+plot_iteration <-
+  left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+  ggplot(aes(x = shannon_custom)) +
+  geom_histogram(color = "black") +
+  labs(x = paste0("Shannon diversity (", i, ")"), y = "Frequency") +
+  theme_light()
+
+boxplot_iteration <-
+  left_join(con_joined, con_iteration, by = "consumer_iso3c") %>%
+  ggplot(aes(x = region, y = shannon_custom, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  labs(x = "", y = paste0("Shannon diversity (", i, ")")) +
+  guides(fill = "none") +
+  scale_fill_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  theme_light()
+
+# Set median value for median line in graph
+col_name_exactly <- sym(paste0("prop_exactly_", i))
+median_value_exactly <- con_joined %>%
+  summarise(median = median(!!col_name_exactly, na.rm = TRUE)) %>%
+  pull(median)
+
+# Set median value for median line in graph
+col_name_at_least <- sym(paste0("prop_at_least_", i))
+median_value_at_least <- con_joined %>%
+  summarise(median = median(!!col_name_at_least, na.rm = TRUE)) %>%
+  pull(median)
+
+prop_exactly_taxalevel_versus_hdi <- con_joined %>%
+  ggplot(aes(
+    x = hdi,
+    y = .data[[paste0("prop_exactly_", i)]],
+    color = region,
+    size = shannon
+  )) +
+  scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  geom_point() +
+  theme_light() +
+  labs(color = "",
+       x = "Human Development Index",
+       y = paste0("Proportion of production\nreported to exactly ", i),
+       size = paste0("Shannon diversity (", i, ")")) +
+  scale_size(range = c(0, 2)) +
+  ylim(0.0, 1.0) +
+  geom_abline(aes(intercept = median_value_exactly, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_exactly, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
+
+prop_at_least_taxalevel_versus_weight <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = .data[[paste0("prop_at_least_", i)]], color = region, size = hdi)) +
+  scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  geom_point()+
+  theme_light() +
+  labs(color = "", x = "Log transformed total consumed \nseafood weight (tons)", y = paste0("Proportion of production\nreported to at least ", i), size = "HDI") +
+  scale_size(range = c(0,2)) +
+  ylim(0.0, 1.0) +
+  geom_abline(aes(intercept = median_value_at_least, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_at_least, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
+
+prop_at_least_taxalevel_versus_hdi <- con_joined %>%
+  ggplot(aes(
+    x = hdi,
+    y = .data[[paste0("prop_at_least_", i)]],
+    color = region,
+    size = shannon
+  )) +
+  scale_color_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  geom_point() +
+  theme_light() +
+  labs(color = "",
+       x = "Human Development Index",
+       y = paste0("Proportion of production\nreported to at least ", i),
+       size = paste0("Shannon diversity (", i, ")")) +
+  scale_size(range = c(0, 2)) +
+  ylim(0.0, 1.0) +
+  geom_abline(aes(intercept = median_value_at_least, slope = 0), linetype = 2, size = 1.1, alpha = 0.5) +
+  guides(color = guide_legend(title = paste0("Median proportion\nreported: ", round(median_value_at_least, 2)), title.theme = element_text(face = "bold.italic"), order = 1), size = guide_legend(order = 2))
+  
+  # Print plot
+  print(plot_iteration)
+  print(boxplot_iteration)
+
+  # Shannon sd
+  shannon_sd <- left_join(con_joined, con_iteration, by = "consumer_iso3c") %>% pull(shannon_custom) %>% sd()
+  # print(paste0(i, " standard deviation: ", signif(shannon_sd, 3)))
+
+  # Shannon max/min
+  shannon_max <- con_iteration %>% pull(shannon_custom) %>% max()
+  shannon_min <- con_iteration %>% pull(shannon_custom) %>% min()
+  print(paste0(i, " shannon [min, max]: [", round(shannon_min, 2), ", ", round(shannon_max, 2), "]"))
+  print(con_iteration)
+  
+  ggsave(paste0("../images/prop_exactly_",i , "_versus_hdi.jpg"), plot = prop_exactly_taxalevel_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_at_least_",i , "_versus_weight.jpg"), plot = prop_at_least_taxalevel_versus_weight, device = "jpeg", height = 4, width = 6, units = "in")
+  ggsave(paste0("../images/prop_at_least_",i , "_versus_hdi.jpg"), plot = prop_at_least_taxalevel_versus_hdi, device = "jpeg", height = 4, width = 6, units = "in")
+}
+```
+
+
+
+```{r data visualization + analysis}
+# Top 10 total seafood weights by country
+(country_weights <- con_joined %>%
+  arrange(desc(total_weight)) %>%
+  select(consumer_iso3c, total_weight) %>%
+  top_n(10) %>%
+  ggplot(aes(x = total_weight, 
+             y = fct_reorder(consumer_iso3c, desc(-total_weight)))) +
+  geom_col() +
+  labs(x = "Total seafood weight (tons)", y = "Consuming country (imports)") +
+  theme_light())
+
+# Top 10 most diverse seafood by country 
+(country_diversities <- con_joined %>%
+  arrange(desc(shannon)) %>%
+  select(consumer_iso3c, shannon) %>%
+  top_n(10) %>%
+  ggplot(aes(x = shannon, 
+             y = fct_reorder(consumer_iso3c, desc(-shannon)))) +
+  geom_col() +
+  labs(x = "Shannon Diversity", y = "Consuming country (imports)") +
+  theme_light())
+
+# Relationship between shannon diversity and the total weight by country
+(shannon_versus_weight <- con_joined %>%
+  ggplot(aes(x = log(total_weight), y = shannon, color = hdi)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_viridis_c() +
+  facet_wrap(~ region) +
+  theme_light() +
+  labs(x = "Log transformed total seafood weight (tons)", y = "Shannon diversity (species)", color = "HDI"))
+
+# Props reported by region by taxonomic resolution
+(prop_versus_tax_versus_country <- con_joined %>%
+  pivot_longer(cols = c("prop_at_least_species","prop_at_least_genus","prop_at_least_family","prop_at_least_order"), names_to = "level", values_to = "prop") %>%
+  mutate(level = str_remove(level, "prop_at_least_"), level = str_to_title(level), level = factor(level, levels = c("Order", "Family", "Genus", "Species"))) %>%
+  ggplot(aes(x = reorder(level, -prop), y = prop, fill = region)) +
+  geom_boxplot() +
+  scale_fill_manual(values = artis_palette(length(unique(con_joined$region)))) +
+  theme_light() +
+  labs(x = "Taxonomic level", y = "Proportion of production\nreported to at least target\ntaxonomic level", fill = "Region"))
+
+# % countries stock reported as absent (only including ARTIS linked fb/slb species)
+(prop_absences_linked <- linked_props %>%
+  ggplot(aes(x = prop_missing)) +
+  geom_boxplot(fill = artis_palette(1)) +
+  labs(x = "Prop of countries' stock reported as absent\n(Fishbase/Sealifebase") +
+  theme_light() +
+      theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()))
+
+# % countries stock reported as absent (ARTIS linked + unlinkedfb/slb species)
+(prop_absences_linked_unlinked <- linked_unlinked_props %>%
+  ggplot(aes(x = prop_missing)) +
+  geom_boxplot(fill = artis_palette(1)) +
+  labs(x = "Prop of countries' stock reported as absent\n(Fishbase/Sealifebase") +
+  theme_light() +
+      theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()))
+
+# Create maps
+(prop_map_linked <- create_map(linked_props) + 
+  labs(fill = "Prop of taxa reported as absent"))
+ 
+(prop_map_linked_unlinked <- create_map(linked_unlinked_props) +
+  labs(fill = "Prop of taxa reported as absent"))
+
+# Prop taxa repoted vs prop absences
+ for (i in c("species", "genus", "family", "order", "class", "phylum", "kingdom")) {
+  graph <- data_for_interpolation %>%
+  group_by(eez_iso3c) %>%
+  distinct(prop_missing, !!sym(paste0("prop_at_least_", i))) %>%
+  exploreARTIS::add_region("eez_iso3c", region.col.name = "region") %>%
+  ggplot(aes(y = prop_missing, x = !!sym(paste0("prop_at_least_", i)), color = region)) +
+  geom_point() +
+  scale_color_manual(values = artis_palette(6)) +
+  theme_light() +
+  labs(x = paste0("Proportion EEZ taxa reported to ", i), y = "Proportion reported as absent", color = "Region") +
+    xlim(0,1)
+  
+  ggsave(paste0("../images/prop_absences_vs_prop_", i, ".jpg"), plot = graph, device = "jpeg", width = 6, height = 4)
+ }
+
+# Violin plots of consuming countries' trade dependencies
+consumer_foreign_dependencies %>%
+  mutate(foreign_dependency = foreign_dependency * 100) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(x = region, y = foreign_dependency, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  labs(x = "", y = "% foreign dependency") +
+  guides(fill = "none") +
+  theme_light() +
+  scale_fill_manual(values = artis_palette(6))
+
+# Foreign dependency of all consumer countries histgoram
+consumer_foreign_dependencies %>%
+  ggplot(aes(x = foreign_dependency)) +
+  geom_histogram(color = "black") +
+  labs(x = "Proportion foreign dependency", y = "# consuming conutries") +
+  theme_light()
+
+# Consumer stock change graph
+(consumer_stock_change_graph <- consumer_stock_change %>%
+  ggplot(aes(y = region, x  = change_in_stock, fill = region)) +
+  geom_violin(alpha = 0.7) +
+  geom_point() +
+  theme_light() +
+  guides(fill = "none") +
+  labs(y = "", x = "% change in seafood stocks") +
+  scale_fill_manual(values = artis_palette(6)) +
+  facet_wrap(~ scenario))
+
+# Define a consistent color mapping for all species
+species_colors <- c(
+  "engraulis anchoita" = "#6A3D9A", 
+  "engraulis encrasicolus" = "#E31A1C", 
+  "engraulis japonicus" = "#FF7F00", 
+  "engraulis ringens" = "#FDBF6F", 
+  "gadus macrocephalus" = "#CAB2D6", 
+  "katsuwonus pelamis" = "#33A02C", 
+  "thunnus albacares" = "#1F78B4"
+)
+
+species_colors <- c(
+  "engraulis anchoita" = "#642233", 
+  "engraulis encrasicolus" = "#8c3d37", 
+  "engraulis japonicus" = "#ab663f", 
+  "engraulis ringens" = "#c29550", 
+  "gadus macrocephalus" = "#c8b366", 
+  "katsuwonus pelamis" = "#93a988", 
+  "thunnus albacares" = "#5d888b"
+)
+
+# Seafood products with increasing trends in catch
+(safer_prospective_products_graph <- safer_prospective_products %>%
+  ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
+  geom_col(position = "fill") +
+  theme_light() +
+  scale_fill_manual(values = species_colors) +  # Use the shared color mapping
+  labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
+  facet_wrap(~ scenario) +
+  theme(axis.text.x= element_text(size = 8)))
+
+# Seafood products with decreasing trends in catch
+(unsafe_prospective_products_graph <- unsafe_prospective_products %>%
+  ggplot(aes(x = n, y = region, fill = sciname_hs_modified)) +
+  geom_col(position = "fill") +
+  theme_light() +
+  scale_fill_manual(values = species_colors) +  # Use the shared color mapping
+  labs(x = "Prop of countries in a region", y = "", fill = "Scientific name") +
+  facet_wrap(~ scenario)  +
+  theme(axis.text.x= element_text(size = 8)))
+
+# Mean foreign dependency, by region, by year
+consumer_foreign_dependencies %>%
+  group_by(region, year) %>%
+  summarize(foreign_dependency = mean(foreign_dependency)) %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(x = year, y = foreign_dependency, color = region)) +
+  geom_point() +
+  scale_color_manual(values = artis_palette(6)) + 
+  scale_fill_manual(values = artis_palette(6)) +
+  geom_smooth(aes(fill = region), method = "gam", alpha = 0.2) +
+  theme_light() +
+  labs(x = "", y = "% foreign dependency", color = "Region") +
+  guides(fill = "none") +
+  theme(legend.position="bottom")
+
+# Case study looking at foreign dependency by country
+consumer_foreign_dependencies %>%
+  filter(consumer_iso3c == "KEN") %>%
+  ggplot(aes(x = year, y = foreign_dependency)) +
+  geom_point()+
+  geom_smooth(method = "gam", alpha = 0.2) +
+  theme_light() +
+  labs(x = "", y = "% foreign dependency") +
+  guides(fill = "none") +
+  theme(legend.position="bottom")
+
+# Boxplot time series of foreign dependency by region
+foreign_dependency_time_series <- consumer_foreign_dependencies %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(x = factor(year), y = foreign_dependency, fill = region)) +  # Convert year to factor to treat as categorical
+  geom_boxplot() +  # Create separate plots for each region
+  scale_fill_manual(values = artis_palette(6)) +  # Apply custom color palette
+  theme_light() +
+  labs(x = "", y = "Foreign Dependency", fill = "Region") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  guides(fill = "none")
+
+# look at time series data for 
+consumer_foreign_dependencies %>%
+  filter(consumer_iso3c == "VCT") %>%
+  mutate(foreign_dependency = 100 * foreign_dependency) %>%
+  ggplot(aes(x = year, y = foreign_dependency)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal_hgrid() +
+  labs(x = "", y = "% foreign dependency")
+  
+# Look at data coverage for adaptive capacity
+world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+world_map <- world_map %>%
+  left_join(ac_coverage, by = c("iso_a3" = "consumer_iso3c"))
+  
+  world_map %>%
+ggplot() +
+  geom_sf(data = ocean, fill = "#8080ff80") +
+  geom_sf(aes(fill = factor(artis)), color = "black") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  coord_sf(crs = "+proj=robin") +
+  labs(fill = "# AC datasets ARTIS\nconsuming country\nis missing from") +
+    scale_fill_brewer(palette = "Reds", na.value = "gray")
+  
+  
+# ANOVA testing prop at least species vs region
+leveneTest(prop_at_least_species ~ region, data = con_joined)
+aov(prop_at_least_species ~ region, data = con_joined) %>% summary()
+TukeyHSD(aov(prop_at_least_species ~ region, data = con_joined))
+
+# ... genus ...
+leveneTest(prop_at_least_genus ~ region, data = con_joined)
+aov(prop_at_least_genus ~ region, data = con_joined) %>% summary()
+TukeyHSD(aov(prop_at_least_genus ~ region, data = con_joined))
+
+# ... family ...
+leveneTest(prop_at_least_family ~ region, data = con_joined)
+aov(prop_at_least_family ~ region, data = con_joined) %>% summary()
+
+# ... order ...
+leveneTest(prop_at_least_order ~ region, data = con_joined)
+aov(prop_at_least_order ~ region, data = con_joined) %>% summary()
+
+# Correlations between variables (plots + pearson)
+pairs(con_na_removed[c(3:6)])
+cor(con_na_removed[c(3:6)])
+
+# Linear model between weight
+weight_shannon_lm <- lm(shannon ~ log(total_weight) + region * log(total_weight), data = con_joined)
+summary(weight_shannon_lm)
+
+# Test to see if adding unlinked fb/slb data significantly changes countries' distributions in proportion of reported absences - it is significant! p = 0.04.
+t.test(linked_unlinked_props$prop_missing, linked_props$prop_missing, alternative = "less")
+
+# Testing out normalizing data - potentially might need to regularize if data is not normally distrubted.
+hist((log(con_na_removed$total_weight) - min(log(con_na_removed$total_weight))) / (max(log(con_na_removed$total_weight)) - min(log(con_na_removed$total_weight))))
+countrycode(con_joined$consumer_iso3c, "iso3c", "region")
+```
+
+> Takeaways: Little correlation between hdi and total weight + shannon diversity, but stronger, positive correlation between weight and shannon diversity (as seen in correlatnion + scatter plots)
+
+
+```{r visualize sensitivity data}
+# Visualziation for importance on supply
+supply_importance %>%
+  filter(year == 2019) %>%
+  mutate(importance_on_protein_cons = importance_on_protein_cons * 100) %>%
+  ggplot(aes(x = region, y = importance_on_protein_cons, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  theme_minimal_hgrid() +
+  scale_fill_manual(values = artis_palette(6)) +
+  guides(fill = "none") +
+  labs(y = "% importance of marine capture taxa\non overall protein supply",
+       caption = "0 = No importance, 1 = 100% importance on protein supply")
+
+# Time series of importance over time
+(supply_importance_ts <- supply_importance %>%
+  group_by(year, region) %>%
+  mutate(importance_on_protein_cons = importance_on_protein_cons * 100) %>%
+  ggplot(aes(x = factor(year), y = importance_on_protein_cons, fill = region)) +
+  geom_boxplot() +
+  theme_minimal_hgrid() +
+  scale_fill_manual(values = artis_palette(6)) +
+  labs(color = "Region", y = "% mean importance") +
+  scale_x_discrete(breaks = seq(2010, 2019, by = 1)) +
+  labs(x = "", y = "% importance of marine capture taxa\non overall protein supply"))
+
+# Look specifically at the USA
+artis_fao_fbb %>%
+  group_by(year, consumer_iso3c) %>%
+  mutate(importance_on_protein_cons = prop_consumption * prop_aquatic_animal) %>%
+  filter(!is.na(region)) %>%
+  filter(year == 2019,
+         consumer_iso3c == "USA") %>%
+  ungroup() %>%
+  select(prop_consumption,
+         prop_aquatic_animal,
+         importance_on_protein_cons,
+         habitat,
+         method,
+         -year) %>%
+  mutate(prop_consumption = round(prop_consumption, 3),
+         prop_aquatic_animal = round(prop_aquatic_animal, 3),
+         importance_on_protein_cons = round(importance_on_protein_cons, 3))
+
+# Time series of overall mean proportion of conusmed protein
+left_join(aquatic_animal_proteins, total_protein) %>%
+  group_by(iso3c, year) %>%
+  summarize(prop_aquatic_animal = a_a_protein / t_p) %>%
+  group_by(year) %>%
+  summarize(overall_prop = mean(prop_aquatic_animal, na.rm = TRUE)) %>%
+  ggplot(aes(x = as.numeric(year), y = overall_prop)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Year") +
+  theme_minimal_hgrid() +
+  labs(y = "Seafood as a proportion of\ntotal consumed protein, globally") +
+   scale_x_continuous(breaks=seq(2010,2019,1))
+```
+
+```{r visualize exposure data}
+# Safer products
+safer_prospective_products <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  mutate(future_change_catch = case_when(
+    future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+    future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), # Convert percentage to proportion
+    future_change_catch == 0 ~ 1)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(future_weight_t = live_weight_t * future_change_catch,
+            change_in_stock = (future_weight_t / live_weight_t)) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  mutate(total_present_weight = sum(live_weight_t)) %>%
+  ungroup() %>%
+  mutate(change_in_stock = case_when(
+    change_in_stock > 1 ~ (change_in_stock - 1) * 100,
+    change_in_stock < 1 ~ (1 - change_in_stock) * -100,
+    change_in_stock == 1 ~ 0
+  )) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(pct_influence = live_weight_t / total_present_weight,
+         change_in_stock = pct_influence * change_in_stock) %>% # weight stock changes by % live weight for a conusmer has with respect to their total weight (so not all changes in stocks are treated equally (i.e. one change in stock has a high percent, but a very low recorded weight))
+  group_by(consumer_iso3c, scenario) %>%
+  slice_max(change_in_stock, n = 1) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  group_by(region, scenario) %>%
+  count(sciname_hs_modified) %>%
+  filter(!is.na(region))
+
+# Less safe products
+unsafe_prospective_products <- consumption_future %>% 
+  filter(consumer_iso3c != producer_iso3c,
+         !is.na(live_weight_t),
+         !is.na(future_change_catch)) %>%
+  mutate(future_change_catch = case_when(
+    future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+    future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), # Convert percentage to proportion
+    future_change_catch == 0 ~ 1)) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(future_weight_t = live_weight_t * future_change_catch,
+            change_in_stock = (future_weight_t / live_weight_t)) %>%
+  group_by(consumer_iso3c, scenario) %>%
+  mutate(total_present_weight = sum(live_weight_t)) %>%
+  ungroup() %>%
+  mutate(change_in_stock = case_when(
+    change_in_stock > 1 ~ (change_in_stock - 1) * 100,
+    change_in_stock < 1 ~ (1 - change_in_stock) * -100,
+    change_in_stock == 1 ~ 0
+  )) %>%
+  group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
+  mutate(pct_influence = live_weight_t / total_present_weight,
+         change_in_stock = pct_influence * change_in_stock) %>% # weight stock changes by % live weight for a conusmer has with respect to their total weight (so not all changes in stocks are treated equally (i.e. one change in stock has a high percent, but a very low recorded weight))
+  group_by(consumer_iso3c, scenario) %>%
+  slice_min(change_in_stock, n = 1) %>%
+  exploreARTIS::add_region("consumer_iso3c", region.col.name = "region") %>%
+  group_by(region, scenario) %>%
+  count(sciname_hs_modified) %>%
+  filter(!is.na(region))
+
+
+
+
+
+
+theme_fancy_map <- function() {
+  theme_void(base_family = "IBM Plex Sans") +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.13, size = rel(1.4)),
+      plot.subtitle = element_text(hjust = 0.13, size = rel(1.1)),
+      plot.caption = element_text(hjust = 0.13, size = rel(0.8), color = "grey50"),
+    )
+}
+
+
+world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+world_map <- world_map %>%
+  left_join(consumer_stock_change[consumer_stock_change$scenario == "2030ssp126",], by = c("iso_a3" = "consumer_iso3c"))
+  
+  world_map %>%
+ggplot() +
+  geom_sf(data = ocean, fill = "#8080ff80") +
+  geom_sf(aes(fill = change_in_stock), color = "black") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  coord_sf(crs = "+proj=robin") +
+    scale_fill_stepsn(
+    colours = scales::brewer_pal(palette = "YlGnBu")(9),
+    breaks = seq(-20, 140, by = 20)
+  )
+  
+  
+  
+consumer_stock_change  %>%
+  ggplot(aes(x = change_in_stock)) +
+  # Fill each histogram bar using the x axis category that ggplot creates
+  geom_histogram(
+    aes(fill = after_stat(factor(x))), 
+    binwidth = 15, boundary = 0, color = "white"
+  ) +
+  # Fill with the same palette as the map
+  scale_fill_brewer(palette = "YlGnBu", guide = "none") +
+  # Modify the x-axis labels to use >9%
+  scale_x_continuous(
+    breaks = seq(-20, 140, by = 20), # Adjust to have breaks at equal intervals
+    labels = case_match(
+      seq(-20, 140, by = 20),
+      2 ~ "2%",
+      10 ~ ">9%",
+      .default = as.character(seq(-20, 140, by = 20))
+    )
+  ) +
+  theme_void() +
+  theme(
+    axis.text.x = element_text(size = rel(0.55)),
+    axis.title.x = element_text(size = rel(0.68), margin = margin(t = 3, b = 3), face = "bold")
+  )
+
+
+
+consumer_stock_change %>%
+  ggplot(aes(x = pct_change, fill = scenario)) +
+  geom_histogram(alpha = 0.5, position = "identity", color = "black", boundary = 0) +
+  theme_cowplot() +
+  labs(x = "% Change in stock\n(future from present)", y = "# Countries", fill = "Scenario")
+
+consumer_stock_change %>%
+  exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region") %>%
+  filter(!is.na(region)) %>%
+  ggplot(aes(y = region, x = pct_change, fill = region)) +
+  geom_violin(alpha = 0.5) +
+  geom_point() +
+  theme_cowplot(10) +
+  facet_wrap(~ scenario) +
+  scale_fill_manual(values = artis_palette(6)) +
+  labs(x = "% Change in stock\n(future from present)", y = "") +
+  guides(fill = "none") +
+  theme_light()
+
+consumer_stock_change_pre %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t)) %>%
+  ggplot(aes(x = pct_change, fill = scenario)) +
+  geom_histogram(color = "black", boundary = 0) +
+  xlim(-100, 100) +
+  facet_wrap(~ scenario) +
+  theme_cowplot() +
+  labs(x = "% Change Catch", y = "Count") +
+  guides(fill = "none")
+
+df %>%
+  pivot_longer(cols = c("ssp126", "ssp585")) %>%
+  ggplot(aes(x = value, fill = name)) +
+  geom_histogram(color = "black", boundary = 0) +
+  theme_cowplot() +
+  xlim(-100, 100) +
+  facet_wrap(~ name) +
+  labs(x = "% Change Catch", y = "Count") +
+  guides(fill = "none")
+```
+
+
+## Save Images
+
+```{r Save images}
+# Save images
+ggsave("../images/country_weights.jpg", plot = country_weights, device = "jpeg", height = 3, width = 5, units = "in")
+
+ggsave("../images/country_diversities.jpg", plot = country_diversities, device = "jpeg", height = 3, width = 5, units = "in")
+
+ggsave("../images/shannon_versus_weight.jpg", plot = shannon_versus_weight, device = "jpeg", height = 3, width = 5, units = "in")
+
+ggsave("../images/prop_versus_tax_versus_country.jpg", plot = prop_versus_tax_versus_country, device = "jpeg", height = 4, width = 9, units = "in")
+
+ggsave("../images/prop_absences_linked.jpg", plot = prop_absences_linked, device = "jpeg", height = 3, width = 5, units = "in")
+
+ggsave("../images/prop_absences_linked_unlinked.jpg", plot = prop_absences_linked_unlinked, device = "jpeg", height = 3, width = 5, units = "in")
+
+ggsave("../images/prop_map_linked.png", plot = prop_map_linked, device = "jpeg", width = 6, height = 4)
+
+ggsave("../images/prop_map_linked_unlinked.png", plot = prop_map_linked_unlinked, device = "jpeg", width = 6, height = 4)
+
+ggsave("../images/consumer_stock_change_graph.png", plot = consumer_stock_change_graph, device = "jpeg", width = 10, height = 6)
+
+ggsave("../images/safer_prospective_products_graph.png", plot = safer_prospective_products_graph, device = "jpeg", width = 9, height = 5)
+
+ggsave("../images/unsafe_prospective_products_graph.png", plot = unsafe_prospective_products_graph, device = "jpeg", width = 9, height = 5)
+
+ggsave("../images/foreign_dependency_time_series.jpg", plot = foreign_dependency_time_series, device = "jpeg", width = 20, height = 2)
+
+ggsave("../images/supply_importance_ts.jpg", plot = supply_importance_ts, device = "jpeg", width = 9, height = 5)
+```
