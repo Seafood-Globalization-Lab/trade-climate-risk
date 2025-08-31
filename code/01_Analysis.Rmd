@@ -20,6 +20,7 @@ library(RColorBrewer)
 library(rnaturalearth)
 library(rnaturalearthdata)
 library(sf)
+library(dirmult)
 
 # Load in packages needed for ARTIS
 library(devtools)
@@ -31,30 +32,8 @@ library(exploreARTIS)
 ```
 
 ```{r initialize functions}
-# Ocean polygon
-ocean <- st_polygon(list(cbind(c(seq(-180, 179, len = 100), rep(180, 100), 
-                        seq(179, -180, len = 100), rep(-180, 100)),
-                      c(rep(-90, 100), seq(-89, 89, len = 100),
-                        rep(90, 100), seq(89, -90, len = 100))))) %>%
-  st_sfc(crs = "WGS84") %>%
-  st_as_sf()
-
-# Map creation function
-create_map <- function(data = data, fill = "prop_missing", country.col.name) {
-  world_map <- ne_countries(scale = "medium", returnclass = "sf")
-
-world_map <- world_map %>%
-  left_join(data, by = c("iso_a3" = country.col.name))
-  
-  world_map %>%
-ggplot() +
-  geom_sf(data = ocean, fill = "#8080ff80") +
-  geom_sf(aes(fill = !!sym(fill)), color = "black") + 
-  scale_fill_viridis_c(option = "plasma") +
-  theme_minimal() +
-  theme(legend.position = "bottom") +
-  coord_sf(crs = "+proj=robin")
-}
+# Load in map creation function
+source("../R/create_map.R")
 ```
 
 # Objective
@@ -75,8 +54,8 @@ risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio) %>%
   mutate(coverage = "entire portfolio")
 
 # Look at correlations between vulnerability and E + S + AC
-pairs(risk[,2:5])
-cor_vals <- cor(risk[,2:5])
+pairs(risk_foreign_imports[,2:5])
+cor_vals <- cor(risk_foreign_imports[,2:5])
 
 
 # Save correlation values to RDS
@@ -85,26 +64,26 @@ saveRDS(cor_vals, "../output/cor_vals.rds")
 # Look at the distribution of the pct change in stocks globally by shared socioeconomic pathway.
 e_s_ac_data %>%
   ggplot(aes(x = pct_change)) +
-  geom_histogram(color = "black") +
+  geom_histogram(color = "black", boundary = 0) +
   facet_wrap(~ scenario) +
   theme_cowplot() +
   labs(x = "% Change in stock", y = "# countries")
 
 # Who sources from countries that are more or less vulnerable
-consumption %>%
-  filter(year == 2019) %>%
-  left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
-  rename(producer_risk = "vulnerability") %>%
-  filter(producer_iso3c != consumer_iso3c) %>%
-  mutate(risk_sum = live_weight_t * producer_risk) %>%
-  filter(!is.na(producer_risk)) %>%
-  group_by(consumer_iso3c) %>%
-  summarize(total_risk = -log(-sum(risk_sum))) %>%
-  rename(eez_iso3c = "consumer_iso3c") %>%
-  create_map(fill = "total_risk") +
-  labs(fill = "Sourcing riskiness from foreign imports") +
-  theme(legend.ticks = element_blank(),
-        legend.text = element_blank())
+# consumption %>%
+#   filter(year == 2019) %>%
+#   left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+#   rename(producer_risk = "vulnerability") %>%
+#   filter(producer_iso3c != consumer_iso3c) %>%
+#   mutate(risk_sum = live_weight_t * producer_risk) %>%
+#   filter(!is.na(producer_risk)) %>%
+#   group_by(consumer_iso3c) %>%
+#   summarize(total_risk = -log(-sum(risk_sum))) %>%
+#   rename(eez_iso3c = "consumer_iso3c") %>%
+#   create_map(fill = "total_risk") +
+#   labs(fill = "Sourcing riskiness from foreign imports") +
+#   theme(legend.ticks = element_blank(),
+#         legend.text = element_blank())
 ```
 
 ```{r how much risk is coming from foreign and domestic sources?}
@@ -141,6 +120,9 @@ risk_comparison  <- bind_rows(risk_foreign_imports, risk_overall) %>%
 
 
 ```{r run sensitivity analysis}
-source("../R/sensitivity_analysis")
+source("../R/risk_analysis.R")
+
+sensitivity_analysis(e_s_ac_data)
+sensitivity_analysis(e_s_ac_data_entire_portfolio)
 ```
 

@@ -132,6 +132,45 @@ consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet"
 sciname <- read_csv("../data/sciname.csv")
 ```
 
+```{r look at how many consumed ARTIS species are invasive}
+# Load in function for identifying which ARTIS species are invasive
+source("../R/get_invasives.R")
+
+# Get ARTIS scientific names
+artis_scinames <- sciname %>%
+  distinct(sciname) %>%
+  pull(sciname)
+
+# Get invasive list from fb/slb - last date acquired: 8/27/2025
+# fb_introductions <- rfishbase::introductions(server = "fishbase")
+# write_parquet(fb_introductions, "../data/fb_slb_data/fb_introductions.parquet")
+
+# ... same thing but for sealifebase - last date acquired: 8/27/2025
+# slb_introductions <- rfishbase::introductions(server = "sealifebase")
+# write_parquet(slb_introductions, "../data/fb_slb_data/slb_introductions.parquet")
+
+# Read in introductions data
+fb_introductions <- read_parquet("../data/fb_slb_data/fb_introductions.parquet")
+slb_introductions <- read_parquet("../data/fb_slb_data/slb_introductions.parquet")
+
+# Get fb/slb species codes
+fb_species_codes <- read_parquet("../data/fb_slb_data/fb_species_codes.parquet")
+slb_species_codes <- read_parquet("../data/fb_slb_data/slb_species_codes.parquet")
+
+# Import file for correcting fb/slb territory names to iso3c 
+territory_corrections <- read_csv("../data/fb_slb_data/fb_slb_territory_corrections.csv") %>%
+  select(c(fb_slb_territories_iso3c, fb_slb_unmatched_territories, "associated_territory_country_iso3c" = "associated_country_iso3c...7", "associated_country_iso3c" = "associated_country_iso3c...5"))
+
+sciname_corrections <- read_csv("../data/fb_slb_data/fb_slb_territory_corrections.csv") %>%
+  select(fb_slb_scientific_name, new_sciname)
+  
+# Get invasive species for fishbase and sealifebase
+invasives <- get_invasives(introductions_data = fb_introductions, species_codes_data = fb_species_codes)
+
+# Write to parquet
+write_parquet(invasives, "../output/invasives.parquet")
+```
+
 ```{r disaggregate future climate measurements}
 # Read in future climate data
 df <- read_csv("../output/future_climate_joined.csv")
@@ -266,7 +305,6 @@ consumption_future %>% distinct(sciname_hs_modified)
 #   filter(class == "actinopterygii",
 #          is.na(ssp126)) 
 ```
-
 
 ```{r derive exposure measurements via disaggregated future climate data}
 ### BRINGING IN interpolated_future_data from 98_Testing_Future_Catch_Disaggregation ###

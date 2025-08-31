@@ -35,7 +35,7 @@ comb_1 <- plot_grid(A,B)
 (fig_one <- plot_grid(comb_1,C, ncol = 1))
 
 # Save plot
-ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
+# ggsave("../images/fig_one.jpg", plot = fig_one, device = "jpeg", width = 6, height = 4, units = "in")
 ```
 
 ```{r bivariate color plot}
@@ -92,17 +92,17 @@ attach_key(map = risk_biv_map, mapkey = risk_biv_key)
 
 ```{r figure two}
 # Map vulnerability
-(fig_two <- risk %>%
+(fig_two <- risk_foreign_imports %>%
   create_map(fill = "vulnerability", country.col.name = "consumer_iso3c") +
   labs(fill = "Vulnerability score"))
 
-# Save plot
+5# Save plot
 ggsave("../images/fig_two.jpg", plot = fig_two, device = "jpeg", width = 4, height = 3, units = "in")
 ```
 
 
 ```{r figure three}
-A <- risk %>%
+A <- risk_foreign_imports %>%
   ggplot(aes(x = exposure, y = vulnerability, color = region)) +
   geom_point() +
   theme_cowplot() +
@@ -127,7 +127,7 @@ legend <- ggdraw() +
 A <- A +
   guides(color = "none")
 
-B <- risk %>%
+B <- risk_foreign_imports %>%
   ggplot(aes(x = sensitivity, y = vulnerability, color = region)) +
   geom_point() +
   theme_cowplot() +
@@ -137,7 +137,7 @@ B <- risk %>%
 
 
 
-C <- risk %>%
+C <- risk_foreign_imports %>%
   ggplot(aes(x = adaptive_capacity, y = vulnerability, color = region)) +
   geom_point() +
   theme_cowplot() +
@@ -158,9 +158,15 @@ risk_comparison %>%
   ggplot(aes(x = foreign_contribution_pct)) +
   geom_histogram(color = "black", boundary = 0) +
   theme_light() +
-  labs(x = "Foreign contribution to entire porfolio risk (%)", y = "Number of countries")
+  labs(x = "Foreign import contribution to entire porfolio risk (%)", y = "Number of countries")
 
 risk_comparison %>%
   create_map(fill = "foreign_contribution_pct", country.col.name = "consumer_iso3c")
+```
+
+```{r look at consumed invasives}
+invasives <- read_parquet("../output/invasives.parquet")
+create_map(data = invasives, fill = "invasive", country.col.name = "iso3c", color.scale = FALSE) + scale_fill_manual(values = "darkred", na.value = "darkgrey") +
+  labs(fill = "Invasive")
 ```
 
