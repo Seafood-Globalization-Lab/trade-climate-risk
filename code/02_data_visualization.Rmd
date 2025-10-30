@@ -11,21 +11,22 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Data Visualization + Analysis
 
-
+> To run code: Run The first two code chunks in 01_Analysis
+  
 ```{r figure one}
-A <- risk_foreign_imports %>%
+A <- risk_overall %>%
 create_map(fill = "exposure", country.col.name = "consumer_iso3c") +
   labs(fill = "Exposure", tag = "A") + 
   theme(plot.margin = unit(c(0,0,0,0), "cm"),
         plot.tag = element_text(face = "bold"))
 
-B <- risk_foreign_imports %>%
+B <- risk_overall %>%
 create_map(fill = "sensitivity", country.col.name = "consumer_iso3c")+
   labs(fill = "Sensitivity", tag = "B") + 
   theme(plot.margin = unit(c(0,0,0,0), "cm"),
         plot.tag = element_text(face = "bold"))
 
-C <- risk_foreign_imports %>%
+C <- risk_overall %>%
   create_map(fill = "adaptive_capacity", country.col.name = "consumer_iso3c") +
   labs(fill = "Adaptive capacity", tag = "C") + 
   theme(plot.margin = unit(c(0,0,0,0), "cm"),
@@ -52,7 +53,7 @@ world_map <- ne_countries(scale = "medium", returnclass = "sf") %>%
 
 # Step 2: Merge your risk data to the shapefile
 risk_map <- world_map %>%
-  left_join(risk, by = c("iso_a3" = "consumer_iso3c"))
+  left_join(risk_foreign_imports, by = c("iso_a3" = "consumer_iso3c"))
 
 # Step 3: Drop geometry to prepare bivariate input
 risk_df <- st_drop_geometry(risk_map) %>%

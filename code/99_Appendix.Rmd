@@ -1891,3 +1891,102 @@ ggsave("../images/foreign_dependency_time_series.jpg", plot = foreign_dependency
 
 ggsave("../images/supply_importance_ts.jpg", plot = supply_importance_ts, device = "jpeg", width = 9, height = 5)
 ```
+
+```{r supplementary (Look at adaptive capacity variable coverage) need to run 00_preprocess_data.Rmd to get these inputs}
+
+# assign missing countries to vector
+missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,h,i,j,k))
+
+# Look at variable coverage across datasets for each country
+ variable_coverage <- consuming_countries %>%
+   select(-artis) %>%
+   mutate(a = case_when(consumer_iso3c %in% a ~ 1, TRUE ~ 0),
+          b = case_when(consumer_iso3c %in% b ~ 1, TRUE ~ 0),
+          c = case_when(consumer_iso3c %in% c ~ 1, TRUE ~ 0),
+          d = case_when(consumer_iso3c %in% d ~ 1, TRUE ~ 0),
+          e = case_when(consumer_iso3c %in% e ~ 1, TRUE ~ 0),
+          f = case_when(consumer_iso3c %in% f ~ 1, TRUE ~ 0),
+          h = case_when(consumer_iso3c %in% h ~ 1, TRUE ~ 0),
+          i = case_when(consumer_iso3c %in% i ~ 1, TRUE ~ 0),
+          j = case_when(consumer_iso3c %in% j ~ 1, TRUE ~ 0),
+          k = case_when(consumer_iso3c %in% k ~ 1, TRUE ~ 0)) %>%
+   pivot_longer(cols = c(a,b,c,d,e,f,h,i,j,k)) %>%
+   rename(ac_var_name = "name",
+          present_absent = "value") %>%
+   filter(!str_detect(consumer_iso3c, "NEI")) %>%
+   mutate(ac_var_name = case_when(
+     ac_var_name == "a" ~ "Access to sanitation",
+     ac_var_name == "b" ~ "GDP",
+     ac_var_name == "c" ~ "Prop trade of GDP",
+     ac_var_name == "d" ~ "Life expectancy at birth",
+     ac_var_name == "e" ~ "Supermarkets per 100,000",
+     ac_var_name == "f" ~ "Prop population in labor force",
+     ac_var_name == "h" ~ "Human capital index",
+     ac_var_name == "i" ~ "Government effectivenes",
+     ac_var_name == "j" ~ "Food safety capacity",
+     ac_var_name == "k" ~ "Rule of law"
+   ))
+
+# Create a heatmap of the variable coverage
+variable_coverage %>%
+  ggplot(aes(y = ac_var_name, x = consumer_iso3c, fill = factor(present_absent))) +
+  geom_tile() +
+  scale_fill_manual(values = c("white", "#FF0000")) +
+  guides(fill = "none") +
+  theme_cowplot() +
+  theme(axis.text.x = element_blank()) +
+  labs(x = "Consuming country", y = "Adaptive capacity variable")
+
+# Get whether an artis country was missing across # of datasets
+missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,h,i,j,k)) %>%
+  count(consumer_iso3c) %>%
+  rename(artis = "n") %>%
+  filter(consumer_iso3c != "NEI")
+
+# Show which artis countries are covered by artis / which are not
+ac_coverage <- bind_rows(consuming_countries %>%
+                           mutate(artis = 0) %>%
+                           filter(!consumer_iso3c %in% missing_artis_ac_countries), 
+                         missing_artis_ac_countries)
+
+ac_coverage %>%
+  mutate(artis = as.numeric(artis)) %>%
+  filter(artis != 0) %>%
+  ggplot(aes(x = artis)) +
+  geom_histogram(boundary = 0, binwidth = 1, color = "black") +
+  theme_cowplot(15) +
+  labs(x = "# AC datasets ARTIS\nconsuming country\nis missing from",
+       y = "# countries")
+
+# Calculate number of datasets countries are missing from
+variable_coverage %>%
+  group_by(consumer_iso3c) %>%
+  summarize(num_datasets_missing_from = sum(present_absent)) %>%
+  arrange(-num_datasets_missing_from) %>%
+  filter(!str_detect(consumer_iso3c, "NEI")) %>%
+  write.csv("../data/adaptive capacity/ac_coverage.csv")
+
+variable_coverage %>%
+  group_by(ac_var_name) %>%
+  summarize(num_countries_missing = sum(present_absent)) %>%
+  arrange(-num_countries_missing)
+```
+
+```{r}
+# Who sources from countries that are more or less vulnerable
+# consumption %>%
+#   filter(year == 2019) %>%
+#   left_join(risk, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+#   rename(producer_risk = "vulnerability") %>%
+#   filter(producer_iso3c != consumer_iso3c) %>%
+#   mutate(risk_sum = live_weight_t * producer_risk) %>%
+#   filter(!is.na(producer_risk)) %>%
+#   group_by(consumer_iso3c) %>%
+#   summarize(total_risk = -log(-sum(risk_sum))) %>%
+#   rename(eez_iso3c = "consumer_iso3c") %>%
+#   create_map(fill = "total_risk") +
+#   labs(fill = "Sourcing riskiness from foreign imports") +
+#   theme(legend.ticks = element_blank(),
+#         legend.text = element_blank())
+```
+

@@ -32,13 +32,11 @@ calculate_risk <- function(data) {
   # Calculate vulernability (Risk = Exposure + Risk - Adaptive Capacity)
   risk <- left_join(data %>% filter(scenario == "ssp126"), adaptive_capacity_calcs, by = "consumer_iso3c") %>%
     filter(!is.na(adaptive_capacity)) %>%
-    mutate(across(c(pct_change, aa_reliance_pct,
-                    foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
+    mutate(across(c(pct_change, aa_reliance_pct), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
     group_by(consumer_iso3c) %>%
-    mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
+    mutate(aa_reliance_pct_scaled = aa_reliance_pct,
            sensitivity = aa_reliance_pct_scaled) %>%
-    filter(!is.na(foreign_dependency_scaled),
-           !is.na(aa_reliance_pct_scaled)) %>%
+    filter(!is.na(aa_reliance_pct_scaled)) %>%
     rename(exposure = "pct_change_scaled") %>%
     select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
     mutate(adaptive_capacity = adaptive_capacity) %>%

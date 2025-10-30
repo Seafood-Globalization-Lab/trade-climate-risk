@@ -33,6 +33,9 @@ library(exploreARTIS)
 
 # Data Cleaning
 
+
+
+
 ```{r new preprocess future climate data}
 # file_names <- list.files(path = "../data/exposure/mcp_per_change/mcp_per_change/", pattern = "\\.csv", full.names = TRUE)
 # 
@@ -120,7 +123,7 @@ library(exploreARTIS)
 # df <- bind_rows(df, df_postprocessed)
 ```
 
-```{r data cleaning for hdi + consumption data}
+```{r load in consumption data}
 # Read in cosnumption data
 consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet") %>%
   mutate(sciname_hs_modified = case_when(
@@ -299,11 +302,6 @@ interpolated_future_data %>%
 unique(df1$sciname) %>% length()
 
 consumption_future %>% distinct(sciname_hs_modified)
-
-# consumption_future %>%
-#   left_join(sciname, by = c("sciname_hs_modfied" = "sciname")) %>%
-#   filter(class == "actinopterygii",
-#          is.na(ssp126)) 
 ```
 
 ```{r derive exposure measurements via disaggregated future climate data}
@@ -354,71 +352,43 @@ rm(df1, interpolated_future_data, consumer_stock_change_pre)
 gc() # Garbage collection to clean up storage
 ```
 
-```{r delete}
-# test_country <- countries_with_both$consumer_iso3c[1]
-# test_scenario <- countries_with_both$scenario[1]
-# 
-# # Run your exact pipeline on this one country - with domestic
-# with_domestic_test <- consumption_future %>% 
-#   filter(consumer_iso3c == test_country, scenario == test_scenario,
-#          !is.na(live_weight_t), !is.na(future_change_catch)) %>%
-#   mutate(future_change_catch = case_when(
-#     future_change_catch > 0 ~ (future_change_catch / 100) + 1,
-#     future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
-#     future_change_catch == 0 ~ 1)) %>%
-#   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
-#   group_by(consumer_iso3c, scenario) %>%
-#   summarize(change_in_stock = sum(change_in_stock),
-#             live_weight_t = sum(live_weight_t), .groups = 'drop')
-# 
-# # Run pipeline - imports only  
-# imports_only_test <- consumption_future %>% 
-#   filter(consumer_iso3c == test_country, scenario == test_scenario,
-#          consumer_iso3c != producer_iso3c,
-#          !is.na(live_weight_t), !is.na(future_change_catch)) %>%
-#   mutate(future_change_catch = case_when(
-#     future_change_catch > 0 ~ (future_change_catch / 100) + 1,
-#     future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
-#     future_change_catch == 0 ~ 1)) %>%
-#   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
-#   group_by(consumer_iso3c, scenario) %>%
-#   summarize(change_in_stock = sum(change_in_stock),
-#             live_weight_t = sum(live_weight_t), .groups = 'drop')
-# 
-# print("With domestic:")
-# print(with_domestic_test)
-# print("Imports only:")
-# print(imports_only_test)
-# print("Difference in live_weight_t:")
-# print(with_domestic_test$live_weight_t - imports_only_test$live_weight_t)
-```
+## Sensitivity data Acquisition
 
+> Sensitivity data comes from Connnor Quiroz' first chapter on calculating global marine capture aquatic animal protein reliance.
+
+**Note:** Based on how this script is executed, one of the two aa_reliance will be used. The first one acquires the first aquatic animal reliance for a countries' entire marine capture consumption. The second aa_reliance is only the aquatic animal reliance for countries' foreign marine capture consumption. 
 
 ```{r add in sensitivity data}
 # Read in supply importance data
 supply_importance <- read_csv("../data/sensitivity/supply_importance.csv")
 
-# Calculate foreign dependency
-consumer_foreign_dependencies <- supply_importance %>%
-  filter(consumption_source == "foreign") %>%
-  group_by(consumer_iso3c, year) %>%
-  summarize(foreign_dependency = sum(prop_consumption)) %>%
-exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region")
-
-# Calculate aquatic animal reliance
+# Calculate aquatic animal reliance from foreign and domestic sources
 aa_reliance <- supply_importance %>% # Add in fao sensitivity data
               filter(year == 2019,
                      habitat == "marine",
-                     method == "capture") %>%
+                     method == "capture",
+                     food_group == "aquatic") %>%
               group_by(consumer_iso3c) %>% # Sum across domestic / foreign consumption
               summarize(aa_reliance_pct = sum(aa_reliance_pct)) %>%
               ungroup()
+
+# Calculate aquatic animal reliance from foreign sources
+# aa_reliance <- supply_importance %>% # Add in fao sensitivity data
+#               filter(year == 2019,
+#                      habitat == "marine",
+#                      method == "capture",
+#                      food_group == "aquatic",
+#                      consumption_source == "foreign") # No need to summarize / aggregate since this this data we want in disaggregated form.
+
+
+
 
 # Remove previous objects to keep data usage small
 rm(supply_importance)
 gc() # Garbage collection to clean up storage
 ```
 
+## Adaptive capacity data acquisition
 
 ```{r process adaptive capacity data}
 # Get ARTIS consuming countries (For identifying data coverage)
@@ -520,19 +490,6 @@ f <- country_coverage(prop_population_clean, join_by = "Country Code")
 # LEARNING #
 ############
 
-# Jessica's (UNESCO) data - similar coverage to mean years schooling - fsc had higher data coverage over both World Bank and UNESCO
-
-# avg_education <- read_csv("../data/adaptive capacity/all_national_indicators.csv")
-
-# # mean years schooling data
-# mean_years_schooling <- read_csv("../data/adaptive capacity/learning/mean_years_schooling.csv")
-# # 
-# mean_years_schooling_clean <- mean_years_schooling %>%
-#   filter(Year == 2015) %>%
-#   filter(!is.na(avg_years_education_15_to_64))
-# 
-# g <- country_coverage(mean_years_schooling_clean, join_by = "Code")
-
 # Human capital index
 hci <- read_csv("../data/adaptive capacity/learning/HCIData.csv")
 
@@ -577,87 +534,9 @@ k <- country_coverage(rol_clean, join_by = "Economy ISO3")
 # Count total number of ARTIS countries missing across adaptive capacity sources
 length(unique(c(a,b,c,d,e,f,h,i,j,k)))
 
-# assign missing countries to vector
-missing_artis_ac_countries <- unique(c(a,b,c,d,e,f,h,i,j,k))
-
-# Look at variable coverage across datasets for each country
- variable_coverage <- consuming_countries %>%
-   select(-artis) %>%
-   mutate(a = case_when(consumer_iso3c %in% a ~ 1, TRUE ~ 0),
-          b = case_when(consumer_iso3c %in% b ~ 1, TRUE ~ 0),
-          c = case_when(consumer_iso3c %in% c ~ 1, TRUE ~ 0),
-          d = case_when(consumer_iso3c %in% d ~ 1, TRUE ~ 0),
-          e = case_when(consumer_iso3c %in% e ~ 1, TRUE ~ 0),
-          f = case_when(consumer_iso3c %in% f ~ 1, TRUE ~ 0),
-          h = case_when(consumer_iso3c %in% h ~ 1, TRUE ~ 0),
-          i = case_when(consumer_iso3c %in% i ~ 1, TRUE ~ 0),
-          j = case_when(consumer_iso3c %in% j ~ 1, TRUE ~ 0),
-          k = case_when(consumer_iso3c %in% k ~ 1, TRUE ~ 0)) %>%
-   pivot_longer(cols = c(a,b,c,d,e,f,h,i,j,k)) %>%
-   rename(ac_var_name = "name",
-          present_absent = "value") %>%
-   filter(!str_detect(consumer_iso3c, "NEI")) %>%
-   mutate(ac_var_name = case_when(
-     ac_var_name == "a" ~ "Access to sanitation",
-     ac_var_name == "b" ~ "GDP",
-     ac_var_name == "c" ~ "Prop trade of GDP",
-     ac_var_name == "d" ~ "Life expectancy at birth",
-     ac_var_name == "e" ~ "Supermarkets per 100,000",
-     ac_var_name == "f" ~ "Prop population in labor force",
-     ac_var_name == "h" ~ "Human capital index",
-     ac_var_name == "i" ~ "Government effectivenes",
-     ac_var_name == "j" ~ "Food safety capacity",
-     ac_var_name == "k" ~ "Rule of law"
-   ))
-
-# Create a heatmap of the variable coverage
-variable_coverage %>%
-  ggplot(aes(y = ac_var_name, x = consumer_iso3c, fill = factor(present_absent))) +
-  geom_tile() +
-  scale_fill_manual(values = c("white", "#FF0000")) +
-  guides(fill = "none") +
-  theme_cowplot() +
-  theme(axis.text.x = element_blank()) +
-  labs(x = "Consuming country", y = "Adaptive capacity variable")
-
-# Get whether an artis country was missing across # of datasets
-missing_artis_ac_countries <- data.frame(consumer_iso3c = c(a,b,c,d,e,f,h,i,j,k)) %>%
-  count(consumer_iso3c) %>%
-  rename(artis = "n") %>%
-  filter(consumer_iso3c != "NEI")
-
-# Show which artis countries are covered by artis / which are not
-ac_coverage <- bind_rows(consuming_countries %>%
-                           mutate(artis = 0) %>%
-                           filter(!consumer_iso3c %in% missing_artis_ac_countries), 
-                         missing_artis_ac_countries)
-
-ac_coverage %>%
-  mutate(artis = as.numeric(artis)) %>%
-  filter(artis != 0) %>%
-  ggplot(aes(x = artis)) +
-  geom_histogram(boundary = 0, binwidth = 1, color = "black") +
-  theme_cowplot(15) +
-  labs(x = "# AC datasets ARTIS\nconsuming country\nis missing from",
-       y = "# countries")
-
-# Calculate number of datasets countries are missing from
-variable_coverage %>%
-  group_by(consumer_iso3c) %>%
-  summarize(num_datasets_missing_from = sum(present_absent)) %>%
-  arrange(-num_datasets_missing_from) %>%
-  filter(!str_detect(consumer_iso3c, "NEI")) %>%
-  write.csv("../data/adaptive capacity/ac_coverage.csv")
-
-variable_coverage %>%
-  group_by(ac_var_name) %>%
-  summarize(num_countries_missing = sum(present_absent)) %>%
-  arrange(-num_countries_missing)
-```
-
-```{r Join e / s / ac to prep for risk calculaton}
-# Prepare AC data so that it can be joined
-
+################################################
+## Prepare AC data so that it can be joined   ##
+################################################
 # Assets
 gdp_clean <- gdp_clean %>%
   rename(gdp = "2019", consumer_iso3c = "Country Code")
@@ -683,14 +562,9 @@ prop_population_clean <- prop_population_clean %>%
 
 # Learning
 
-# No longer using mean years schooling
-# mean_years_schooling_clean <- mean_years_schooling_clean %>%
-#   rename(avg_yrs_educ = "avg_years_education_15_to_64", consumer_iso3c = "Code") %>%
-# select(consumer_iso3c, avg_yrs_educ)
-
+# Human capacity index
 hci_clean <- hci_clean %>%
   rename(hci = "2018", consumer_iso3c = "Country Code")
-
 
 # Social organization
 government_effectiveness_clean <- government_effectiveness_clean %>%
@@ -705,8 +579,8 @@ rol_clean <- rol_clean %>%
   rename(rol = "2019", consumer_iso3c = "Economy ISO3") %>%
   select(consumer_iso3c, rol)
 
-# A LOT OF JOINS
-e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
+# Join all adaptive capacity data sources
+adaptive_capacity <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(sanitation_clean) %>%
   left_join(supermarkets_clean) %>%
   left_join(life_expectancy_clean) %>%
@@ -714,7 +588,17 @@ e_s_ac_data <- left_join(gdp_clean, trade_gdp_clean) %>%
   left_join(hci_clean) %>%
   left_join(government_effectiveness_clean) %>%
   left_join(fsc_clean) %>%
-  left_join(rol_clean) %>%
+  left_join(rol_clean)
+```
+
+
+
+
+## Combine exposure, sensitivity, and adaptive capacity  components 
+
+```{r Join e / s / ac to prep for risk calculaton}
+
+e_s_ac_data <- adaptive_capacity %>%
   right_join(aa_reliance) %>% # Right join to only include consuming ARTIS countries (Aquatic animal reliance Sensitivity)
   left_join(consumer_foreign_dependencies %>% # Add in foreign dependency sensitivity
               filter(year == 2019) %>%
