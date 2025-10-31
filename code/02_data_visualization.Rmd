@@ -92,10 +92,17 @@ attach_key(map = risk_biv_map, mapkey = risk_biv_key)
 
 
 ```{r figure two}
-# Map vulnerability
+# Foreign imports vulnerability
 (fig_two <- risk_foreign_imports %>%
   create_map(fill = "vulnerability", country.col.name = "consumer_iso3c") +
   labs(fill = "Vulnerability score"))
+
+# Total portfolio vulnerability
+(fig_two <- risk_overall %>%
+  create_map(fill = "vulnerability", country.col.name = "consumer_iso3c") +
+  labs(fill = "Vulnerability score"))
+
+
 
 5# Save plot
 ggsave("../images/fig_two.jpg", plot = fig_two, device = "jpeg", width = 4, height = 3, units = "in")

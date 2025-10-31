@@ -1,13 +1,15 @@
 acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   
   ###############################################################################
-  #####                        Initialize script                             #####
+  #####                        Initialize script                            #####
   ###############################################################################
   
   if (foreign == TRUE) {
     string = "foreign imports"
+    output_name = "foreign_imports"
   } else {
     string = "total"
+    output_name = "total"
   }
   
   cat("\n==============================\n")
@@ -43,68 +45,69 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ###############################################################################
   #####                  Preprocess future climate data                     #####
   ###############################################################################
-  # file_names <- list.files(path = paste0(directory_path, "exposure/mcp_per_change/mcp_per_change/"), pattern = "\\.csv", full.names = TRUE)
-  # 
-  # # Obtain species lookup key (will be used in loop join)
-  # species_names <- fread(paste0(directory_path,"exposure/dbem_spp_list.csv"))
-  # 
-  # # initiate empty df
-  # df <- data.frame()
-  # 
-  # for (i in 1:length(file_names)) {
-  #   # Read in i'th species file in loop
-  #   df_i <- fread(file_names[i])
-  # 
-  #   df_i <- left_join(df_i, species_names, by = "taxon_key")
-  # 
-  #   # Select only certain variables for certain years and pivot wider
-  #   df_i <- df_i %>%
-  #     mutate(taxon_name = str_to_lower(taxon_name)) %>%
-  #     select(taxon_name, eez_name, ssp, per_change) %>%
-  #     pivot_wider(names_from = ssp, values_from = per_change)
-  # 
-  #   # Combine all species observations into one file
-  #   df <- df %>%
-  #     bind_rows(df_i)
-  # }
-  # 
-  # # Obtain previous state on dataframe (to get unmatched)
-  # df_preprocessed <- df
-  # 
-  # # Convert eez variable countries to iso3c codes
-  # for (i in 1:length(df$eez_name)) {
-  #   df$eez_name[i] <- countrycode(df$eez_name[i], origin = 'country.name', destination = 'iso3c')
-  # }
-  # 
-  # # Rename country variable so it can be joined
-  # df <- df %>%
-  #   rename(eez_iso3c = "eez_name",
-  #          sciname = "taxon_name")
-  # 
-  # # Write joined future cimate data to .csv
-  # write_csv(df, "../output/future_climate_joined.csv")
-  # 
-  # # # See how many countries were not matches
-  # sum(is.na(df$eez_iso3c))
-  # 
-  # # # Number of countries that properly got matched
-  # length(unique(df$eez_iso3c))
-  # 
-  # # # Unmatched countries via countrycode
-  # unmatched_countries <- unique(df_preprocessed$eez_name[c(which(is.na(df$eez_iso3c)))])
-  # 
-  # # # Only keep rows in preprocessed dataset that are unmatched countries
-  # df_preprocessed <- df_preprocessed %>%
-  #   filter(eez_name %in% unmatched_countries)
-  # 
-  # # Territories that were not matched via countrycode (Tokelau & Svalbard Isl.)
-  # df_preprocessed %>% distinct(eez_name)
+  file_names <- list.files(path = paste0(directory_path, "exposure/dbem_delta_mcp/"), pattern = "\\.csv", full.names = TRUE)
+
+  # Obtain species lookup key (will be used in loop join)
+  species_names <- fread(paste0(directory_path,"exposure/dbem_spp_list.csv"))
+
+  # initiate empty df
+  df <- data.frame()
+
+  # Join all future species change in catch data together
+  
+  for (i in 1:length(file_names)) {
+    # Read in i'th species file in loop
+    df_i <- fread(file_names[i])
+    
+    if (nrow(df_i) > 0) {
+      df_i <- left_join(df_i, species_names, by = "taxon_key")
+      
+      # Select only certain variables for certain years and pivot wider
+      df_i <- df_i %>%
+        mutate(taxon_name = str_to_lower(taxon_name)) %>%
+        select(taxon_name, eez_name, ssp, mean_mcp_delta_2030
+        ) %>%
+        pivot_wider(names_from = ssp, values_from = mean_mcp_delta_2030
+        )
+      
+      # Combine all species observations into one file
+      df <- df %>%
+        bind_rows(df_i)
+    }
+
+    
+  }
+
+  # Convert eez variable countries to iso3c codes
+  df <- df %>%
+    mutate(eez_name = case_when(
+      eez_name == "Tokelau (New Zealand)" ~ "NZL", 
+      eez_name == "Svalbard Isl. (Norway)" ~ "NOR", 
+      eez_name == "Chagos Archipelago (UK)" ~ "GBR",
+      eez_name == "Christmas Isl. (Australia)" ~ "AUS",
+      eez_name == "High seas" ~ "NEI",
+      eez_name == "Iran (Sea of Oman)" ~ "IRN",
+      eez_name == "Mayotte (France)" ~ "FRA",
+      eez_name == "Mozambique Channel Isl. (France)" ~ "FRA",
+      eez_name == "New Caledonia (France)" ~ "FRA",
+      eez_name == "Norfolk Isl. (Australia)" ~ "AUS",
+      eez_name == "Réunion (France)" ~ "FRA",
+      eez_name == "Saudi Arabia (Persian Gulf)" ~ "SAU",
+      eez_name == "Wallis & Futuna Isl. (France)" ~ "FRA",
+      eez_name == "Yemen (Arabian Sea)" ~ "YEM",
+      TRUE ~ countrycode(eez_name, origin = "country.name", destination = "iso3c")
+    )) %>%
+    rename(eez_iso3c = "eez_name",
+           sciname = "taxon_name")
+
+  # Write joined future cimate data to .csv
+  write_csv(df, paste0(directory_path, "../output/future_climate_joined.csv"))
   
   ###############################################################################
   #####                Load in consumption & sciname data                   #####
   ###############################################################################
  
-  # Read in cosnumption data
+  # Read in consumption data
   consumption <- read_parquet(paste0(directory_path,"example_consumption_eez_2024_12_06.parquet")) %>%
     mutate(sciname_hs_modified = case_when(
       is.na(sciname_hs_modified) ~ sciname,
@@ -115,50 +118,11 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   sciname <- read_csv(paste0(directory_path,"sciname.csv"))
   
   ###############################################################################
-  #####         Look at how many consumed ARTIS species are invasive        #####
-  ###############################################################################
-  
-  # Load in function for identifying which ARTIS species are invasive
-  source("../R/get_invasives.R")
-  
-  # Get ARTIS scientific names
-  artis_scinames <- sciname %>%
-    distinct(sciname) %>%
-    pull(sciname)
-  
-  # Get invasive list from fb/slb - last date acquired: 8/27/2025
-  # fb_introductions <- rfishbase::introductions(server = "fishbase")
-  # write_parquet(fb_introductions, "../data/fb_slb_data/fb_introductions.parquet")
-  
-  # ... same thing but for sealifebase - last date acquired: 8/27/2025
-  # slb_introductions <- rfishbase::introductions(server = "sealifebase")
-  # write_parquet(slb_introductions, "../data/fb_slb_data/slb_introductions.parquet")
-  
-  # Read in introductions data
-  fb_introductions <- read_parquet(paste0(directory_path,"fb_slb_data/fb_introductions.parquet"))
-  slb_introductions <- read_parquet(paste0(directory_path, "fb_slb_data/slb_introductions.parquet"))
-  
-  # Get fb/slb species codes
-  fb_species_codes <- read_parquet(paste0(directory_path, "fb_slb_data/fb_species_codes.parquet"))
-  slb_species_codes <- read_parquet(paste0(directory_path, "fb_slb_data/slb_species_codes.parquet"))
-  
-  # Import file for correcting fb/slb territory names to iso3c 
-  territory_corrections <- read_csv(paste0(directory_path, "fb_slb_data/fb_slb_territory_corrections.csv")) %>%
-    select(c(fb_slb_territories_iso3c, fb_slb_unmatched_territories, "associated_territory_country_iso3c" = "associated_country_iso3c...7", "associated_country_iso3c" = "associated_country_iso3c...5"))
-  
-  sciname_corrections <- read_csv(paste0(directory_path, "fb_slb_data/fb_slb_territory_corrections.csv")) %>%
-    select(fb_slb_scientific_name, new_sciname)
-  
-  # Get invasive species for fishbase and sealifebase
-  invasives <- get_invasives(introductions_data = fb_introductions, species_codes_data = fb_species_codes)
-  
-  # Write to parquet
-  write_parquet(invasives, "../output/invasives.parquet")
-  
-  ###############################################################################
   #####               Disaggregate future climate measurements              #####
   ###############################################################################
-  # ---- Compute species-level averages ----
+  
+  df <- read_csv(paste0(directory_path, "../output/future_climate_joined.csv"))
+  # ---- Compute species-level averages by eez (average across territories) ----
   df1 <- df %>%
     drop_na() %>%
     group_by(eez_iso3c, sciname) %>%
@@ -232,23 +196,87 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
     tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
     
     for (level in tax_levels) {
+      # Create dynamic join mapping
+      join_by <- setNames("taxa_name", level)
+      
       df <- df %>%
+        select(-taxa_level) %>%
         left_join(
           lookup_table %>% filter(taxa_level == level),
-          by = c("eez_iso3c", level = "taxa_name")
+          by = c("eez_iso3c", join_by)
         ) %>%
         mutate(
-          ssp126 = if_else(is.na(ssp126), avg_ssp126, ssp126),
-          ssp585 = if_else(is.na(ssp585), avg_ssp585, ssp585)
+          ssp126 = case_when(is.na(ssp126) ~ avg_ssp126, TRUE ~ ssp126), # Ignore species, and fill in NA cases that match target taxa name
+          ssp585 = case_when(is.na(ssp585) ~ avg_ssp585, TRUE ~ ssp585)  # Ignore species, and fill in NA cases that match target taxa name
         ) %>%
         select(-avg_ssp126, -avg_ssp585)
+      
     }
+    
+    df <- df %>%
+      select(-taxa_level) # Will add back taxa_level in later
     
     return(df)
   }
   
   # ---- Apply hierarchical filling ----
-  interpolated_future_data <- fill_with_higher_taxa(test_data, lookup_table)
+  interpolated_future_data <- fill_with_higher_taxa(test_data, lookup_table) 
+  
+  # Add back in taxa_level variable
+  interpolated_future_data <- interpolated_future_data %>% 
+    mutate( 
+      taxa_level = case_when(
+        sciname_hs_modified == kingdom ~ "kingdom",
+        sciname_hs_modified == phylum ~ "phylum",
+        sciname_hs_modified == superclass ~ "superclass",
+        sciname_hs_modified == class ~ "class",
+        sciname_hs_modified == order ~ "order",
+        sciname_hs_modified == family ~ "family",
+        sciname_hs_modified == subfamily ~ "subfamily",
+        sciname_hs_modified == genus ~ "genus",
+        str_detect(sciname_hs_modified, " ") ~ "species"
+      ),
+      species = case_when(
+        str_count(sciname_hs_modified, " ") == 1 ~ word(sciname_hs_modified, 2),
+        TRUE ~ NA_character_
+      )
+    )
+  
+  # Proportion of data that is covered by Juliano's climate projections (includes averaging)
+  # up to higher taxa levels + trade flows (will differ from species/eez 
+  # combination coverage prop)
+  # mean(!is.na(interpolated_future_data$ssp126))
+  
+  # i.e., how many columns that are covered / not covered?
+  # interpolated_future_data %>%
+  #   count(!is.na(ssp126))
+  
+  
+  # Proportion of species / eez combinations that are covered by Juliano's data
+  # interpolated_future_data %>%
+  #   mutate(missing = is.na(ssp126)) %>%
+  #   filter(taxa_level == "species") %>%
+  #   select(sciname_hs_modified, eez_iso3c, missing) %>%
+  #   distinct() %>%
+  #   summarize(prop_covered = mean(!missing))
+  
+  # Number of rows species / ezz combinations that are/aren't covered
+  # interpolated_future_data %>%
+  #   mutate(missing = is.na(ssp126)) %>%
+  #   filter(taxa_level == "species") %>%
+  #   select(sciname_hs_modified, eez_iso3c, missing) %>%
+  #   distinct() %>% 
+  #   count(missing)
+    
+    # Export species list that is not covered by Juliano's data
+    # interpolated_future_data %>%
+    #   mutate(missing = is.na(ssp126)) %>%
+    #   filter(missing == TRUE,
+    #          taxa_level == "species") %>%
+    #   select(sciname_hs_modified, eez_iso3c) %>%
+    #   distinct() %>%
+    #   write.csv("output/future_climate_model_missing_species_eez_combinations.csv")
+    
   
   ###############################################################################
   ##### Derive exposure measurements via disaggregated future climate data  #####
@@ -288,10 +316,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
       #        !is.na(future_change_catch)) %>%
       filter(!is.na(live_weight_t),
              !is.na(future_change_catch)) %>% # Gives the entire portfolio
-      mutate(future_change_catch = case_when( # Convert percentage to proportion
-        future_change_catch > 0 ~ (future_change_catch / 100) + 1,
-        future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1), 
-        future_change_catch == 0 ~ 1)) %>%
+      mutate(future_change_catch = 1 + (future_change_catch / 100)) %>%
       # group_by(consumer_iso3c, scenario, sciname_hs_modified) %>%
       mutate(change_in_stock = live_weight_t * future_change_catch)
   }
@@ -317,7 +342,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ###############################################################################
   
   # Read in supply importance data
-  supply_importance <- read_csv(paste0(directory_path, "sensitivity/supply_importance.csv"))
+  supply_importance <- read_csv(paste0(directory_path, "sensitivity/fao_aquatic_reliance_source.csv"))
   
   if (foreign == TRUE) {
     # Calculate aquatic animal reliance from foreign and domestic sources
@@ -326,8 +351,8 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
              habitat == "marine",
              method == "capture",
              food_group == "aquatic") %>%
-      group_by(consumer_iso3c) %>% # Sum across domestic / foreign consumption
-      summarize(aa_reliance_pct = sum(aa_reliance_pct)) %>%
+      group_by(iso3c) %>% # Sum across domestic / foreign consumption
+      summarize(aa_reliance_pct = sum(prop_animal_protein)) %>%
       ungroup()
   } else {
     # Calculate aquatic animal reliance from foreign sources
@@ -336,7 +361,8 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
              habitat == "marine",
              method == "capture",
              food_group == "aquatic",
-             consumption_source == "foreign") # No need to summarize / aggregate since this this data we want in disaggregated form.
+             consumption_source == "foreign") %>% # No need to summarize / aggregate since this this data we want in disaggregated form.
+      select(iso3c, aa_reliance_pct = "prop_animal_protein")
   }
   
   # Remove previous objects to keep data usage small
@@ -485,7 +511,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   k <- country_coverage(rol_clean, join_by = "Economy ISO3")
   
   # Count total number of ARTIS countries missing across adaptive capacity sources
-  length(unique(c(a,b,c,d,e,f,h,i,j,k)))
+  # length(unique(c(a,b,c,d,e,f,h,i,j,k)))
   
   #########################################################
   ##  Prepare AC data so that it can be joined together  ##
@@ -549,15 +575,12 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ###############################################################################
   
   e_s_ac_data <- adaptive_capacity %>%
-    right_join(aa_reliance) %>% # Right join to only include consuming ARTIS countries (Aquatic animal reliance Sensitivity)
-    left_join(consumer_foreign_dependencies %>% # Add in foreign dependency sensitivity
-                filter(year == 2019) %>%
+    right_join(aa_reliance, by = c("consumer_iso3c" = "iso3c")) %>% # Right join to only include consuming ARTIS countries (Aquatic animal reliance Sensitivity)
                 ungroup() %>%
-                select(consumer_iso3c, foreign_dependency)) %>%
     left_join(consumer_stock_change) # Add in exposure data
   
   # Save joined data to output folder
-  write_parquet(e_s_ac_data, "../output/e_s_ac_data.parquet")
+  write_parquet(e_s_ac_data, paste0("../output/e_s_ac_data_", output_name, ".parquet"))
   
   cat("\n==============================\n")
   cat("Saving exposure, sensitivity, and adaptive capacity of each country's **", string, "** portfolio to file.\n", sep = "")

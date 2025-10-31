@@ -33,19 +33,38 @@ library(exploreARTIS)
 
 # Objectives
 
-The goal of this document is to
-- call on a script that acquires exposure, sensitivity, and adaptive capacity data
-- use the exposure, sensitivty, and adaptive capacity data to calculate the climate risk in countries' imports and entire portfolio
-- run a sensitivity analysis each of the components of adaptive capacity to ensure there are no variables that have an excessive contribution to risk
+The purpose of this 01_Analysis is to:
+
+- **Run a data acquisition script** that gathers  
+  - Exposure data  
+  - Sensitivity data  
+  - Adaptive capacity data  
+
+- **Calculate climate risk** for each country's imports and overall seafood portfolio  
+  using the combined exposure, sensitivity, and adaptive capacity datasets.
+
+- **Perform a sensitivity analysis** on adaptive capacity components  
+  to ensure no single variable has a disproportionate effect on total risk.
+
+> 💡 **User input:**  
+> In the code chunk below, replace `file_path` with the path to your input data folder.  
+> Once specified, the script will automatically execute all subsequent steps.
+
 
 ```{r initialize functions}
-
 # Change this line based on user
-file_path <- "C:/Users/cjqui/OneDrive/Desktop/2024-2025/SGL/Chapter 2/data/"
-source("00_Preprocess_Data.R", directory_path = file_path) # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
+# Connor's desktop path
+# file_path <- "C:/Users/cjqui/OneDrive/Desktop/2024-2025/SGL/Chapter 2/data/"
+# Connor's laptop path
+file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
+
+# Jessica's path (insert below)
+# file_path <- ""
+
+source("00_Preprocess_Data.R") # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
 source("../R/create_map.R") # function for creating maps
 source("../R/calculate_risk.R") # function for calculating risk
-source("../R/sensitivity_analysis.R") # function for running a sensitivity analysis on adaptive capacity variables
+# source("../R/sensitivity_analysis.R") # function for running a sensitivity analysis on adaptive capacity variables (Work in Progress)
 ```
 
 # Objective
@@ -53,15 +72,13 @@ source("../R/sensitivity_analysis.R") # function for running a sensitivity analy
 Calculate the risk index given the components for a country's exposure, sensitivity, and adaptive capacity. 
 
 ```{r calculate risk}
-# Get exposure, sensitivty, and adaptive capacity data for foreign imports
-e_s_ac_data <- acquire_e_s_ac_data(foreign = FALSE)
+# Get exposure, sensitivty, and adaptive capacity data for entire portfolio
+e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = FALSE, directory_path = file_path)
 
 # Get exposure, sensitivty, and adaptive capacity data for foreign imports
-e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = TRUE)
+e_s_ac_data <- acquire_e_s_ac_data(foreign = TRUE, directory_path = file_path)
 
-
-
-
+# Calculate risk
 risk_foreign_imports <- calculate_risk(e_s_ac_data) %>%
   mutate(coverage = "foreign imports")
 risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio) %>%
@@ -70,8 +87,6 @@ risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio) %>%
 # Look at correlations between vulnerability and E + S + AC
 pairs(risk_foreign_imports[,2:5])
 cor_vals <- cor(risk_foreign_imports[,2:5])
-# Save correlation values to RDS
-saveRDS(cor_vals, "../output/cor_vals.rds")
 
 # Look at the distribution of the pct change in stocks globally by shared socioeconomic pathway.
 e_s_ac_data %>%
@@ -82,43 +97,11 @@ e_s_ac_data %>%
   labs(x = "% Change in stock", y = "# countries")
 ```
 
-```{r how much risk is coming from foreign and domestic sources?}
-risk_comparison  <- bind_rows(risk_foreign_imports, risk_overall) %>%
-  # Keep only the columns you need for the comparison
-  select(consumer_iso3c, region, coverage, vulnerability) %>%
-  pivot_wider(
-    names_from = coverage, 
-    values_from = vulnerability
-  ) %>%
-  # Clean up column names (replace spaces/special chars if needed)
-  rename(
-    foreign_imports_vuln = `foreign imports`,
-    entire_portfolio_vuln = `entire portfolio`
-  ) %>%
-  mutate(foreign_imports_vuln = foreign_imports_vuln,
-         entire_portfolio_vuln = entire_portfolio_vuln
-) %>%
-  # Calculate foreign contribution metrics
-  mutate(
-    # What percentage of total vulnerability comes from foreign imports
-    foreign_contribution_pct = (foreign_imports_vuln / entire_portfolio_vuln) * 100,
-    
-    # Difference between foreign and total vulnerability  
-    vulnerability_difference = foreign_imports_vuln - entire_portfolio_vuln,
-    
-    # How much does domestic production reduce vulnerability?
-    domestic_buffer = entire_portfolio_vuln - foreign_imports_vuln
-  ) %>%
-  # Remove rows where we don't have both measures
-  filter(!is.na(foreign_imports_vuln), !is.na(entire_portfolio_vuln)) %>%
-  arrange(-foreign_contribution_pct)
-```
-
-
 ```{r run sensitivity analysis}
-source("../R/sensitivity_analysis.R")
-
-sensitivity_analysis(e_s_ac_data)
-sensitivity_analysis(e_s_ac_data_entire_portfolio)
+# # Run sensitivity analysis on foreign import risk
+# sensitivity_analysis(data = e_s_ac_data, risk_data = risk_foreign_imports)
+# 
+# # Run sensitivity analysis on entire portfolio risk
+# sensitivity_analysis(data = e_s_ac_data_entire_portfolio, risk_data = risk_overall)
 ```
 
