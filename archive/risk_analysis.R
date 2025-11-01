@@ -1,5 +1,5 @@
 # Sensitivity Analysis
-sensitivity_analysis <- function(data, risk_data) {
+sensitivity_analysis <- function(data) {
   e_s_ac_long <- data %>% # Put e/s/ac data into long format
     mutate(across(c(gdp, gdp_trade, sanitation, 
                     supermarkets, life_expectancy, prop_labor, hci, gov_effectiveness,
@@ -129,19 +129,19 @@ sensitivity_analysis <- function(data, risk_data) {
               ac_variable == "sanitation_scaled" ~ value * 1 / num_asse_vars,
             
             # flexibility
-            i == "flexibility" & 
+            i == "flexilbity" & 
               ac_variable == "supermarkets_scaled" ~ value * d04,
-            i != "flexibility" & 
+            i != "flexilbity" & 
               ac_variable == "supermarkets_scaled" ~ value * 1 / num_flex_vars,
             
-            i == "flexibility" & 
+            i == "flexilbity" & 
               ac_variable == "life_expectancy_scaled" ~ value * d05,
-            i != "flexibility" & 
+            i != "flexilbity" & 
               ac_variable == "life_expectancy_scaled" ~ value * 1 / num_flex_vars,
             
-            i == "flexibility" & 
+            i == "flexilbity" & 
               ac_variable == "prop_labor_scaled" ~ value * d06,
-            i != "flexibility" & 
+            i != "flexilbity" & 
               ac_variable == "prop_labor_scaled" ~ value * 1 / num_flex_vars,
             
             # learning
@@ -177,18 +177,21 @@ sensitivity_analysis <- function(data, risk_data) {
         risk_simulated <- left_join(e_s_ac_data %>%
                                       filter(scenario == "ssp126"), ac_simulated, by = "consumer_iso3c") %>%
           filter(!is.na(adaptive_capacity)) %>%
-          mutate(across(c(pct_change, aa_reliance_pct), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
+          mutate(across(c(pct_change, aa_reliance_pct,
+                          foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
           group_by(consumer_iso3c) %>%
-          mutate(aa_reliance_pct_scaled = aa_reliance_pct,
-                 sensitivity = aa_reliance_pct_scaled) %>%
-          filter(!is.na(aa_reliance_pct_scaled)) %>%
+          mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
+                 foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
+                 sensitivity = sum(aa_reliance_pct_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+          filter(!is.na(foreign_dependency_scaled),
+                 !is.na(aa_reliance_pct_scaled)) %>%
           rename(exposure = "pct_change_scaled") %>%
           select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
           mutate(adaptive_capacity = adaptive_capacity) %>%
           mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
         
         correlation <- round(cor(risk_simulated$adaptive_capacity,
-                                 risk_data$adaptive_capacity,
+                                 risk$adaptive_capacity,
                                  method = "kendall"), 3)
       }
       
@@ -247,24 +250,40 @@ sensitivity_analysis <- function(data, risk_data) {
       
       ac_simulated <- e_s_ac_long %>%
         mutate(value_scaled = case_when(
-          # Assets
-          ac_variable == "gdp_scaled" ~ value * 1 / num_asse_vars,
-          ac_variable == "gdp_trade_scaled" ~ value * 1 / num_asse_vars,
-          ac_variable == "sanitation_scaled" ~ value * 1 / num_asse_vars,
+          # Assets,
+          (i != "assets" | i == "assets") & 
+            ac_variable == "gdp_scaled" ~ value * 1 / num_asse_vars,
           
-          # flexibility
-          ac_variable == "supermarkets_scaled" ~ value * 1 / num_flex_vars,
-          ac_variable == "life_expectancy_scaled" ~ value * 1 / num_flex_vars,
-          ac_variable == "prop_labor_scaled" ~ value * 1 / num_flex_vars,
+          (i != "assets" | i == "assets") & 
+            ac_variable == "gdp_trade_scaled" ~ value * 1 / num_asse_vars,
+          
+          (i != "assets" | i == "assets") & 
+            ac_variable == "sanitation_scaled" ~ value * 1 / num_asse_vars,
+          
+          # flexibility,
+          (i != "flexilbity" | i == "flexibility") & 
+            ac_variable == "supermarkets_scaled" ~ value * 1 / num_flex_vars,
+          
+          (i != "flexilbity" | i == "flexibility") & 
+            ac_variable == "life_expectancy_scaled" ~ value * 1 / num_flex_vars,
+          
+          (i != "flexilbity" | i == "flexibility") & 
+            ac_variable == "prop_labor_scaled" ~ value * 1 / num_flex_vars,
           
           # learning
-          ac_variable == "hci_scaled" ~ value * 1 / num_learn_vars,
+          (i != "learning" | i == "learning") & 
+            ac_variable == "hci_scaled" ~ value * 1 / num_learn_vars,
           
           # social organization
-          ac_variable == "gov_effectiveness_scaled" ~ value * 1 / num_org_vars,
-          ac_variable == "fsc_scaled" ~ value * 1 / num_org_vars,
-          ac_variable == "rol_scaled" ~ value * 1 / num_org_vars
-        ),
+          (i != "organization" | i == "organization") & 
+            ac_variable == "gov_effectiveness_scaled" ~ value * 1 / num_org_vars,
+          
+          (i != "organization" | i == "organization") & 
+            ac_variable == "fsc_scaled" ~ value * 1 / num_org_vars,
+          
+          (i != "organization" | i == "organization") & 
+            ac_variable == "rol_scaled" ~ value * 1 / num_org_vars),
+          
           # scale overall components of adaptive capacity
           value_scaled = case_when(
             i == "assets" &
@@ -306,18 +325,21 @@ sensitivity_analysis <- function(data, risk_data) {
       risk_simulated <- left_join(e_s_ac_data, ac_simulated, by = "consumer_iso3c") %>%
         filter(!is.na(adaptive_capacity),
                scenario == "ssp126") %>%
-        mutate(across(c(pct_change, aa_reliance_pct), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
+        mutate(across(c(pct_change, aa_reliance_pct,
+                        foreign_dependency), ~ ( . - min(., na.rm = TRUE) ) / ( max(., na.rm = TRUE) - min(., na.rm = TRUE) ), .names = "{.col}_scaled")) %>%
         group_by(consumer_iso3c) %>%
-        mutate(aa_reliance_pct_scaled = aa_reliance_pct,
-               sensitivity = aa_reliance_pct_scaled) %>%
-        filter(!is.na(aa_reliance_pct_scaled)) %>%
+        mutate(aa_reliance_pct_scaled = aa_reliance_pct * 0.5,
+               foreign_dependency_scaled = foreign_dependency_scaled * 0.5,
+               sensitivity = sum(aa_reliance_pct_scaled,foreign_dependency_scaled, na.rm = TRUE)) %>%
+        filter(!is.na(foreign_dependency_scaled),
+               !is.na(aa_reliance_pct_scaled)) %>%
         rename(exposure = "pct_change_scaled") %>%
         select(consumer_iso3c, exposure, sensitivity, adaptive_capacity) %>%
         mutate(adaptive_capacity = adaptive_capacity) %>%
         mutate(vulnerability = (exposure + sensitivity) - adaptive_capacity)
       
       correlation <- round(cor(risk_simulated$adaptive_capacity,
-                               risk_data$adaptive_capacity,
+                               risk$adaptive_capacity,
                                method = "kendall"), 3)
     }
     if (which(i == ac_components$ac_component) == 1) {

@@ -1,6 +1,6 @@
 get_invasives <- function(introductions_data, species_codes_data) {
   # Join territory corrections to fb/slb data and convert country names to iso3c.
-  introductions_data %>%
+  x <- introductions_data %>%
     filter(Invasive == 1) %>%
     rename(country = "TO") %>%
     left_join(species_codes_data, by = "SpecCode") %>%
@@ -33,5 +33,7 @@ get_invasives <- function(introductions_data, species_codes_data) {
     filter(scientificname %in% artis_scinames) %>%
     distinct(scientificname, iso3c) %>%
     mutate(invasive = factor(1))
+  
+  return(x)
   
 }

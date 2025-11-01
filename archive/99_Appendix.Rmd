@@ -1990,3 +1990,83 @@ variable_coverage %>%
 #         legend.text = element_blank())
 ```
 
+## From 00_Preprocess_Data.R file
+
+```{r}
+# source("../R/get_invasives.R") # function for getting invasive species (work in progress)
+
+###############################################################################
+  #####         Look at how many consumed ARTIS species are invasive        #####
+  ###############################################################################
+  
+  # Load in function for identifying which ARTIS species are invasive
+  
+
+  # Get ARTIS scientific names
+  artis_scinames <- sciname %>%
+    distinct(sciname) %>%
+    pull(sciname)
+  
+  # Get invasive list from fb/slb - last date acquired: 8/27/2025
+  # fb_introductions <- rfishbase::introductions(server = "fishbase")
+  # write_parquet(fb_introductions, "../data/fb_slb_data/fb_introductions.parquet")
+  
+  # ... same thing but for sealifebase - last date acquired: 8/27/2025
+  # slb_introductions <- rfishbase::introductions(server = "sealifebase")
+  # write_parquet(slb_introductions, "../data/fb_slb_data/slb_introductions.parquet")
+  
+  # Read in introductions data
+  fb_introductions <- read_parquet(paste0(directory_path,"fb_slb_data/fb_introductions.parquet"))
+  slb_introductions <- read_parquet(paste0(directory_path, "fb_slb_data/slb_introductions.parquet"))
+  
+  # Get fb/slb species codes
+  fb_species_codes <- read_parquet(paste0(directory_path, "fb_slb_data/fb_species_codes.parquet"))
+  slb_species_codes <- read_parquet(paste0(directory_path, "fb_slb_data/slb_species_codes.parquet"))
+  
+  # Import file for correcting fb/slb territory names to iso3c 
+  territory_corrections <- read_csv(paste0(directory_path, "fb_slb_data/fb_slb_territory_corrections.csv")) %>%
+    select(c(fb_slb_territories_iso3c, fb_slb_unmatched_territories, "associated_territory_country_iso3c" = "associated_country_iso3c...7", "associated_country_iso3c" = "associated_country_iso3c...5"))
+  
+  sciname_corrections <- read_csv(paste0(directory_path, "fb_slb_data/fb_slb_territory_corrections.csv")) %>%
+    select(fb_slb_scientific_name, new_sciname)
+  
+  # Get invasive species for fishbase and sealifebase
+  # invasives <- get_invasives(introductions_data = fb_introductions, species_codes_data = fb_species_codes)
+  # 
+  # # Write to parquet
+  # write_parquet(invasives, "../output/invasives.parquet")
+```
+
+## From 01_Analysis file
+
+```{r how much risk is coming from foreign and domestic sources?}
+risk_comparison  <- bind_rows(risk_foreign_imports, risk_overall) %>%
+  # Keep only the columns you need for the comparison
+  select(consumer_iso3c, region, coverage, vulnerability) %>%
+  pivot_wider(
+    names_from = coverage, 
+    values_from = vulnerability
+  ) %>%
+  # Clean up column names (replace spaces/special chars if needed)
+  rename(
+    foreign_imports_vuln = `foreign imports`,
+    entire_portfolio_vuln = `entire portfolio`
+  ) %>%
+  mutate(foreign_imports_vuln = foreign_imports_vuln,
+         entire_portfolio_vuln = entire_portfolio_vuln
+) %>%
+  # Calculate foreign contribution metrics
+  mutate(
+    # What percentage of total vulnerability comes from foreign imports
+    foreign_contribution_pct = (foreign_imports_vuln / entire_portfolio_vuln) * 100,
+    
+    # Difference between foreign and total vulnerability  
+    vulnerability_difference = foreign_imports_vuln - entire_portfolio_vuln,
+    
+    # How much does domestic production reduce vulnerability?
+    domestic_buffer = entire_portfolio_vuln - foreign_imports_vuln
+  ) %>%
+  # Remove rows where we don't have both measures
+  filter(!is.na(foreign_imports_vuln), !is.na(entire_portfolio_vuln)) %>%
+  arrange(-foreign_contribution_pct)
+```
