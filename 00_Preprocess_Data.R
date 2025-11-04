@@ -1,4 +1,4 @@
-acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
+acquire_e_s_ac_data <- function(foreign = TRUE) {
   
   ###############################################################################
   #####                        Initialize script                            #####
@@ -28,6 +28,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   library(arrow)
   library(cowplot)
   library(RColorBrewer)
+  library(here)
   
   # Map creation
   library(rnaturalearth)
@@ -45,10 +46,10 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ###############################################################################
   #####                  Preprocess future climate data                     #####
   ###############################################################################
-  file_names <- list.files(path = paste0(directory_path, "exposure/dbem_delta_mcp/"), pattern = "\\.csv", full.names = TRUE)
+  file_names <- list.files(path = file.path(here(), "data", "exposure", "dbem_delta_mcp"), pattern = "\\.csv", full.names = TRUE)
 
   # Obtain species lookup key (will be used in loop join)
-  species_names <- fread(paste0(directory_path,"exposure/dbem_spp_list.csv"))
+  species_names <- fread(file.path(here(), "data", "exposure", "dbem_spp_list.csv"))
 
   # initiate empty df
   df <- data.frame()
@@ -100,28 +101,28 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
     rename(eez_iso3c = "eez_name",
            sciname = "taxon_name")
 
-  # Write joined future cimate data to .csv
-  write_csv(df, paste0(directory_path, "../output/future_climate_joined.csv"))
+  # Write joined future climate data to .csv
+  write_csv(df, file.path(here(), "output", "future_climate_joined.csv"))
   
   ###############################################################################
   #####                Load in consumption & sciname data                   #####
   ###############################################################################
  
   # Read in consumption data
-  consumption <- read_parquet(paste0(directory_path,"example_consumption_eez_2024_12_06.parquet")) %>%
+  consumption <- read_parquet(file.path(here(), "data", "example_consumption_eez_2024_12_06.parquet")) %>%
     mutate(sciname_hs_modified = case_when(
       is.na(sciname_hs_modified) ~ sciname,
       TRUE ~ sciname_hs_modified
     )) # Get rid of NA scinames
   
   # Read in sciname data (for joining to scinames of future climate)
-  sciname <- read_csv(paste0(directory_path,"sciname.csv"))
+  sciname <- read_csv(file.path(here(), "data","sciname.csv"))
   
   ###############################################################################
   #####               Disaggregate future climate measurements              #####
   ###############################################################################
   
-  df <- read_csv(paste0(directory_path, "../output/future_climate_joined.csv"))
+  df <- read_csv(file.path("output", "future_climate_joined.csv"))
   # ---- Compute species-level averages by eez (average across territories) ----
   df1 <- df %>%
     drop_na() %>%
@@ -331,7 +332,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
     mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t))
   
   # Write to csv
-  write_csv(consumer_stock_change, "../output/consumer_stock_change.csv")
+  write_csv(consumer_stock_change, "output/consumer_stock_change.csv")
   
   # Remove previous objects to keep data usage small
   rm(df1, interpolated_future_data, consumer_stock_change_pre)
@@ -342,7 +343,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ###############################################################################
   
   # Read in supply importance data
-  supply_importance <- read_csv(paste0(directory_path, "sensitivity/fao_aquatic_reliance_source.csv"))
+  supply_importance <- read_csv(file.path(here(), "data", "sensitivity", "fao_aquatic_reliance_source.csv"))
   
   if (foreign == TRUE) {
     # Calculate aquatic animal reliance from foreign and domestic sources
@@ -400,7 +401,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ##########
   
   # sanitation
-  sanitation <- read_csv(paste0(directory_path,"adaptive capacity/assets/sanitation.csv"))
+  sanitation <- read_csv(file.path(here(), "data","adaptive capacity", "assets", "sanitation.csv"))
   
   sanitation_clean <- sanitation %>%
     filter(Indicator_Code == "SH_STA_BASS_ZS", Time_Period == 2019)
@@ -408,7 +409,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   a <- country_coverage(sanitation_clean, join_by = "Geography_Code")
   
   # gdp
-  gdp <- read_csv(paste0(directory_path,"adaptive capacity/assets/gdp.csv"))
+  gdp <- read_csv(file.path(here(), "data","adaptive capacity", "assets", "gdp.csv"))
   
   gdp_clean <- gdp %>%
     select(`Country Code`, `2019`) %>%
@@ -417,7 +418,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   b <- country_coverage(gdp_clean, join_by = "Country Code")
   
   # trade standardized by gdp
-  trade_gdp <- read_csv(paste0(directory_path,"adaptive capacity/assets/trade_gdp.csv"))
+  trade_gdp <- read_csv(file.path(here(), "data", "adaptive capacity", "assets", "trade_gdp.csv"))
   
   trade_gdp_clean <- trade_gdp %>%
     filter(`Indicator Code` == "NE.TRD.GNFS.ZS") %>%
@@ -431,7 +432,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ###############
   
   # life expectancy
-  life_expectancy <- read_csv(paste0(directory_path,"adaptive capacity/flexibility/life_expectancy_at_birth.csv"))
+  life_expectancy <- read_csv(file.path(here(), "data","adaptive capacity", "flexibility", "life_expectancy_at_birth.csv"))
   
   life_expectancy_clean <- life_expectancy %>%
     filter(`Indicator Code` == "SP.DYN.LE00.IN") %>%
@@ -441,7 +442,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   d <- country_coverage(life_expectancy_clean, join_by = "Country Code")
   
   # supermarkets per 100000
-  supermarkets <- read_csv(paste0(directory_path,"adaptive capacity/flexibility/supermarkets_per_100000.csv"))
+  supermarkets <- read_csv(file.path(here(), "data","adaptive capacity", "flexibility", "supermarkets_per_100000.csv"))
   
   supermarkets_clean <- supermarkets %>%
     mutate(iso3c = countrycode(Region, origin = 'country.name', destination = 'iso3c')) %>%
@@ -451,8 +452,8 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   e <- country_coverage(supermarkets_clean, join_by = "iso3c")
   
   # prop labor force
-  total_labor_force <- read_csv(paste0(directory_path,"adaptive capacity/flexibility/total_labor_force.csv"))
-  total_population <- read_csv(paste0(directory_path,"adaptive capacity/flexibility/total_population.csv"))
+  total_labor_force <- read_csv(file.path(here(), "data","adaptive capacity", "flexibility", "total_labor_force.csv"))
+  total_population <- read_csv(file.path(here(), "data","adaptive capacity", "flexibility", "total_population.csv"))
   
   total_population_clean <- total_population %>%
     select(`Country Code`, `2019`) %>%
@@ -470,7 +471,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   ############
   
   # Human capital index
-  hci <- read_csv(paste0(directory_path,"adaptive capacity/learning/HCIData.csv"))
+  hci <- read_csv(file.path(here(), "data","adaptive capacity", "learning", "HCIData.csv"))
   
   hci_clean <- hci %>%
     filter(`Indicator Name` == "Human Capital Index (HCI) (scale 0-1)") %>%
@@ -484,7 +485,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   #######################
   
   # government effectiveness
-  government_effectiveness <- read_csv(paste0(directory_path,"adaptive capacity/social organization/government_effectiveness_percentile.csv"))
+  government_effectiveness <- read_csv(file.path(here(), "data","adaptive capacity", "social organization", "government_effectiveness_percentile.csv"))
   
   government_effectiveness_clean <- government_effectiveness %>%
     filter(`Indicator ID` == "WB.WWGI.GE.PER.RNK") %>%
@@ -494,7 +495,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   i <- country_coverage(government_effectiveness_clean, join_by = "Economy ISO3")
   
   # Food safety capacity
-  fsc <- read_csv(paste0(directory_path,"adaptive capacity/social organization/food-systems-dashboard-2025-03-04.csv"))
+  fsc <- read_csv(file.path(here(), "data","adaptive capacity", "social organization", "food-systems-dashboard-2025-03-04.csv"))
   
   fsc_clean <- fsc %>%
     filter(`Start Year` == 2019 | `End Year` == 2019)
@@ -502,7 +503,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   j <- country_coverage(fsc_clean, join_by = "ISO3")
   
   # Rule of law
-  rol <- read_csv(paste0(directory_path,"adaptive capacity/social organization/WB-WWGI.csv"))
+  rol <- read_csv(file.path(here(), "data","adaptive capacity", "social organization", "WB-WWGI.csv"))
   
   rol_clean <- rol %>% 
     filter(Indicator == "Rule of Law: Percentile Rank") %>%
@@ -580,7 +581,7 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
     left_join(consumer_stock_change) # Add in exposure data
   
   # Save joined data to output folder
-  write_parquet(e_s_ac_data, paste0("../output/e_s_ac_data_", output_name, ".parquet"))
+  write_parquet(e_s_ac_data, file.path("output", paste0("e_s_ac_data_", output_name, ".parquet")))
   
   cat("\n==============================\n")
   cat("Saving exposure, sensitivity, and adaptive capacity of each country's **", string, "** portfolio to file.\n", sep = "")

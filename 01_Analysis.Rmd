@@ -53,8 +53,8 @@ The purpose of this 01_Analysis is to:
 
 ```{r initialize functions}
 source("00_Preprocess_Data.R") # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
-source("../R/create_map.R") # function for creating maps
-source("../R/calculate_risk.R") # function for calculating risk
+source("R/create_map.R") # function for creating maps
+source("R/calculate_risk.R") # function for calculating risk
 # source("../R/sensitivity_analysis.R") # function for running a sensitivity analysis on adaptive capacity variables (Work in Progress)
 ```
 
@@ -63,21 +63,11 @@ source("../R/calculate_risk.R") # function for calculating risk
 > Insert your path to get to your data file (line)
 
 ```{r calculate risk}
-# Change this line based on user
-# Connor's desktop path
-# file_path <- "C:/Users/cjqui/OneDrive/Desktop/2024-2025/SGL/Chapter 2/data/"
-# Connor's laptop path
-file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
-
-# Jessica's path (insert below)
-# file_path <- ""
-
-
 # Get exposure, sensitivty, and adaptive capacity data for entire portfolio
-e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = FALSE, directory_path = file_path)
+e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = FALSE)
 
 # Get exposure, sensitivty, and adaptive capacity data for foreign imports
-e_s_ac_data <- acquire_e_s_ac_data(foreign = TRUE, directory_path = file_path)
+e_s_ac_data <- acquire_e_s_ac_data(foreign = TRUE)
 
 # Calculate risk
 risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio, coverage = "entire portfolio")
