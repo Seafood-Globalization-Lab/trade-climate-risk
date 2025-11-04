@@ -46,7 +46,6 @@ renv/cache/
 
 #/images
 #/images/*
-#/output/
 #.Rhistory
 
-/output
+/output/*
