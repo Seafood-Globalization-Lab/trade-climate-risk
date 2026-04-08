@@ -44,12 +44,42 @@ This notebook:
 > **User input:** Set `file_path` to the root of your input data folder.
 > Everything else runs automatically.
 
+<<<<<<< HEAD:code/01_Analysis.Rmd
 ```{r user-input}
 # Set your path here
 file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
 
 # Jessica's path:
 # file_path <- ""
+=======
+
+```{r initialize functions}
+source("00_Preprocess_Data.R") # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
+source("R/create_map.R") # function for creating maps
+source("R/calculate_risk.R") # function for calculating risk
+# source("../R/sensitivity_analysis.R") # function for running a sensitivity analysis on adaptive capacity variables (Work in Progress)
+```
+
+## Calculate the risk index based on a country’s exposure, sensitivity, and adaptive capacity components.
+
+> Insert your path to get to your data file (line)
+
+```{r calculate risk}
+# Get exposure, sensitivty, and adaptive capacity data for entire portfolio
+e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = FALSE)
+
+# Get exposure, sensitivty, and adaptive capacity data for foreign imports
+e_s_ac_data <- acquire_e_s_ac_data(foreign = TRUE)
+
+# Calculate risk
+risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio, coverage = "entire portfolio")
+
+risk_foreign_imports <- calculate_risk(e_s_ac_data, coverage = "foreign imports")
+  
+# Look at correlations between vulnerability and E + S + AC
+pairs(risk_foreign_imports[,2:5])
+cor_vals <- cor(risk_foreign_imports[,2:5])
+>>>>>>> 2d58c983b1cd703534376998a16cb8f7cb00181d:01_Analysis.Rmd
 ```
 
 ```{r load-functions}
