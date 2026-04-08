@@ -44,14 +44,13 @@ This notebook:
 > **User input:** Set `file_path` to the root of your input data folder.
 > Everything else runs automatically.
 
-<<<<<<< HEAD:code/01_Analysis.Rmd
 ```{r user-input}
 # Set your path here
 file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
 
 # Jessica's path:
 # file_path <- ""
-=======
+```
 
 ```{r initialize functions}
 source("00_Preprocess_Data.R") # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
@@ -79,7 +78,6 @@ risk_foreign_imports <- calculate_risk(e_s_ac_data, coverage = "foreign imports"
 # Look at correlations between vulnerability and E + S + AC
 pairs(risk_foreign_imports[,2:5])
 cor_vals <- cor(risk_foreign_imports[,2:5])
->>>>>>> 2d58c983b1cd703534376998a16cb8f7cb00181d:01_Analysis.Rmd
 ```
 
 ```{r load-functions}
