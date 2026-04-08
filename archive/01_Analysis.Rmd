@@ -1,0 +1,194 @@
+---
+title: "01_Analysis"
+author: "Connor Quiroz"
+date: "2025-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# General data cleaning + visualization + analysis packages
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+
+# Map creation
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+
+# Load in packages needed for ARTIS
+library(devtools)
+library(tidytext)
+# devtools::install_github("davidsjoberg/ggsankey")
+library(ggsankey)
+# devtools::install_github("Seafood-Globalization-Lab/exploreARTIS@v1.0.0", dependencies = TRUE)
+library(exploreARTIS)
+```
+
+# Objectives
+
+The purpose of this 01_Analysis is to:
+
+- **Run a data acquisition script** that gathers  
+  - Exposure data  
+  - Sensitivity data  
+  - Adaptive capacity data  
+
+- **Calculate climate risk** for each country's imports and overall seafood portfolio  
+  using the combined exposure, sensitivity, and adaptive capacity datasets.
+
+- **Perform a sensitivity analysis** on adaptive capacity components  
+  to ensure no single variable has a disproportionate effect on total risk.
+
+> 💡 **User input:**  
+> In the code chunk below, replace `file_path` with the path to your input data folder.  
+> Once specified, the script will automatically execute all subsequent steps.
+
+
+```{r initialize functions}
+source("00_Preprocess_Data.R") # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
+source("../R/create_map.R") # function for creating maps
+source("../R/calculate_risk.R") # function for calculating risk
+# source("../R/sensitivity_analysis.R") # function for running a sensitivity analysis on adaptive capacity variables (Work in Progress)
+```
+
+## Calculate the risk index based on a country’s exposure, sensitivity, and adaptive capacity components.
+
+> Insert your path to get to your data file (line)
+
+```{r calculate risk}
+# Change this line based on user
+# Connor's desktop path
+# file_path <- "C:/Users/cjqui/OneDrive/Desktop/2024-2025/SGL/Chapter 2/data/"
+# Connor's laptop path
+file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
+
+# Jessica's path (insert below)
+# file_path <- ""
+
+
+# Get exposure, sensitivty, and adaptive capacity data for entire portfolio
+e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = FALSE, directory_path = file_path)
+
+# Get exposure, sensitivty, and adaptive capacity data for foreign imports
+e_s_ac_data <- acquire_e_s_ac_data(foreign = TRUE, directory_path = file_path)
+
+# Calculate risk
+risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio, coverage = "entire portfolio")
+
+risk_foreign_imports <- calculate_risk(e_s_ac_data, coverage = "foreign imports")
+  
+# Look at correlations between vulnerability and E + S + AC
+pairs(risk_foreign_imports[,2:5])
+cor_vals <- cor(risk_foreign_imports[,2:5])
+```
+
+## Sensitivity analysis on adaptive capacity variables and components
+
+> Note: This is still a work in progress, so results are likely not be reliable at this stage.
+
+```{r run sensitivity analysis}
+# # Run sensitivity analysis on foreign import risk
+# sensitivity_analysis(data = e_s_ac_data, risk_data = risk_foreign_imports)
+# 
+# # Run sensitivity analysis on entire portfolio risk
+# sensitivity_analysis(data = e_s_ac_data_entire_portfolio, risk_data = risk_overall)
+```
+
+
+```{r}
+# Read in consumption file
+consumption <- read_parquet("../data/example_consumption_eez_2024_12_06.parquet") %>%
+  filter(year == 2019) %>%
+  group_by(consumer_iso3c, sciname_hs_modified) %>%
+  summarize(live_weight_t = sum(live_weight_t))
+
+# Read in future change catch % data
+future_changes <- read_parquet("../output/interpolated_future_data.parquet")
+
+# Read in sciname data
+sciname <- read_csv(paste0(file_path,"sciname.csv"))
+
+consumption %>%
+  left_join(future_changes %>%
+              select(consumer_iso3c, sciname_hs_modified, ssp126) %>% 
+              distinct() %>%
+              filter(!is.na(ssp126)),
+            by = c("consumer_iso3c", "sciname_hs_modified"))
+
+# Join dataset to generalized species groups names (actinopterygii --> fish)
+# joined_dataset <- consumer_stock_change_pre %>%
+#   left_join(sciname %>% select(sciname, isscaap), by = c("sciname_hs_modified" = "sciname")) %>%
+#   ungroup() %>%
+#   mutate(marginal_weight_change = change_in_stock - live_weight_t) %>%
+#   group_by(consumer_iso3c, scenario) %>%
+#   mutate(total_live_weight_t = sum(live_weight_t))
+
+
+# Join species % change to total % change to calculate marginal cointribution of each species to total % change in consumption by species
+# joined_dataset <- joined_dataset %>%
+#               mutate(marginal_prop = marginal_weight_change / total_live_weight_t)
+#
+# # # Convert negative/positive percents to all positive proportons
+# # joined_dataset <- joined_dataset %>%
+# #   ungroup() %>%
+# #   mutate(pct_change = abs((pct_change / 100)),
+# #          total_pct_change = abs((total_pct_change  / 100)),
+# #          marginal_change = pct_change / total_pct_change)
+#   # Calculate how much each species % change contributes to the total % change
+#
+#
+# joined_dataset %>% filter(consumer_iso3c == "USA") %>%
+# ggplot(aes(x = log(live_weight_t), y = marginal_prop)) +
+#   geom_point()
+#
+#
+# # Look at rate of change between future change in catch % and countries' consumption by species
+# joined_dataset %>%
+#   filter(consumer_iso3c == "CHN", scenario == "ssp126") %>%
+#   ggplot(aes(x = log(live_weight_t), y = pct_change)) +
+#   geom_point(aes(color = isscaap)) +
+#   guides(color = "none") +
+#   geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
+#   geom_smooth(method = "lm") +
+#   theme_light()
+#
+# vals <- joined_dataset %>%
+#   filter(scenario == "ssp126") %>%
+#   split(.$consumer_iso3c) %>%
+#   map(~lm(pct_change~log(live_weight_t), data = .x)) %>%
+#   map_df(broom::tidy, .id = 'consumer_iso3c') %>%
+#   filter(term != "(Intercept)")
+#
+# vals %>%
+#   add_region(col = "consumer_iso3c", region.col.name = "region") %>%
+#   ggplot(aes(x = fct_reorder(consumer_iso3c, -estimate), y = estimate, fill = region)) +
+#   geom_col() +
+#   theme_light() +
+#   theme(legend.position = "bottom",
+#         axis.text.x = element_blank())
+#
+#
+# # Plot exposure, sensitivity, and adaptive capacity data together
+# vals %>%
+#   left_join(risk_overall, by = "consumer_iso3c") %>%
+#   mutate(pos_or_neg = case_when(estimate > 0 ~ "positive",
+#                                 estimate < 0 ~ "negative",
+#                                 estimate == 0 ~ "neither")) %>%
+#   ggplot(aes(x = sensitivity, y = adaptive_capacity, color = estimate)) +
+#   geom_point() +
+#   scale_color_gradient2(
+#     low = "blue",   # blue for negative
+#     mid = "white",     # neutral at 0
+#     high = "red",  # red for positive
+#     midpoint = 0,
+#     name = "Rate of change in\naquatic animal reliance"
+#   ) +
+#   theme_dark()
+```

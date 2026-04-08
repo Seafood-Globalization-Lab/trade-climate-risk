@@ -1,0 +1,443 @@
+---
+title: "00 — Preprocess Data"
+author: "Connor Quiroz"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+```
+
+# Overview
+
+This notebook defines four functions that build the exposure, sensitivity, and
+adaptive capacity (E/S/AC) components used to calculate climate risk. Each
+function handles one job:
+
+| Function | Runs once? | Purpose |
+|---|---|---|
+| `preprocess_climate_data()` | ✅ Yes | Read DBEM files → interpolate missing taxa → write parquet |
+| `build_exposure()` | Per portfolio | Join climate projections to consumption; compute % stock change |
+| `build_sensitivity()` | Per portfolio | Compute aquatic animal reliance by portfolio type |
+| `build_adaptive_capacity()` | Per portfolio | Load and join all AC indicators |
+
+`build_e_s_ac_data()` orchestrates the three per-portfolio steps and writes the
+final joined dataset to `../output/`.
+
+---
+
+# Step 1 — Climate data preprocessing (run once)
+
+Reads all DBEM species files, joins species names, converts EEZ strings to
+ISO3C codes, and writes a single joined CSV. Because this step is
+portfolio-agnostic it only needs to run once per session.
+
+```{r preprocess-climate-data}
+preprocess_climate_data <- function(dir) {
+
+  file_names <- list.files(
+    paste0(dir, "exposure/dbem_delta_mcp/"),
+    pattern = "\\.csv",
+    full.names = TRUE
+  )
+
+  species_names <- fread(paste0(dir, "exposure/dbem_spp_list.csv"))
+
+  df <- map_dfr(file_names, function(f) {
+    df_i <- fread(f)
+    if (nrow(df_i) == 0) return(NULL)
+
+    df_i %>%
+      left_join(species_names, by = "taxon_key") %>%
+      mutate(taxon_name = str_to_lower(taxon_name)) %>%
+      select(taxon_name, eez_name, ssp, mean_mcp_delta_2030) %>%
+      pivot_wider(names_from = ssp, values_from = mean_mcp_delta_2030, values_fn = mean)
+  })
+
+  # Recode EEZ territory strings to ISO3C — territories are assigned to their
+  # sovereign nation
+  df <- df %>%
+    mutate(eez_name = case_when(
+      eez_name == "Tokelau (New Zealand)"              ~ "NZL",
+      eez_name == "Svalbard Isl. (Norway)"             ~ "NOR",
+      eez_name == "Chagos Archipelago (UK)"            ~ "GBR",
+      eez_name == "Christmas Isl. (Australia)"         ~ "AUS",
+      eez_name == "High seas"                          ~ "NEI",
+      eez_name == "Iran (Sea of Oman)"                 ~ "IRN",
+      eez_name == "Mayotte (France)"                   ~ "FRA",
+      eez_name == "Mozambique Channel Isl. (France)"   ~ "FRA",
+      eez_name == "New Caledonia (France)"             ~ "FRA",
+      eez_name == "Norfolk Isl. (Australia)"           ~ "AUS",
+      eez_name == "Réunion (France)"                   ~ "FRA",
+      eez_name == "Saudi Arabia (Persian Gulf)"        ~ "SAU",
+      eez_name == "Wallis & Futuna Isl. (France)"      ~ "FRA",
+      eez_name == "Yemen (Arabian Sea)"                ~ "YEM",
+      TRUE ~ countrycode(eez_name, origin = "country.name", destination = "iso3c")
+    )) %>%
+    rename(eez_iso3c = eez_name, sciname = taxon_name)
+
+  write_csv(df, "../output/future_climate_joined.csv")
+  message("✅ future_climate_joined.csv written to ../output/")
+
+  invisible(df)
+}
+```
+
+---
+
+# Step 2 — Exposure (per portfolio)
+
+Joins climate projections to 2019 consumption data, fills missing species
+values up through the taxonomic hierarchy, then computes each country's
+weighted % change in available stock under SSP1-2.6 and SSP5-8.5.
+
+**Portfolio differences:**
+
+- `"foreign"` — keeps only rows where `consumer_iso3c != producer_iso3c` and
+  applies a three-way case_when for the catch-change multiplier (handles
+  positive, negative, and zero separately).
+- `"total"` — retains the full consumption portfolio and uses a simpler
+  `1 + (x / 100)` multiplier.
+
+```{r build-exposure}
+# Helper: classify each sciname to its taxonomic level and extract species epithet
+build_taxa_levels <- function(sciname_df) {
+  sciname_df %>%
+    mutate(
+      taxa_level = case_when(
+        sciname == kingdom   ~ "kingdom",
+        sciname == phylum    ~ "phylum",
+        sciname == superclass ~ "superclass",
+        sciname == class     ~ "class",
+        sciname == order     ~ "order",
+        sciname == family    ~ "family",
+        sciname == subfamily ~ "subfamily",
+        sciname == genus     ~ "genus",
+        str_detect(sciname, " ") ~ "species"
+      ),
+      species = if_else(str_count(sciname, " ") == 1, word(sciname, 2), NA_character_)
+    ) %>%
+    relocate(species, .before = genus) %>%
+    select(-common_name, -isscaap)
+}
+
+# Helper: for each higher taxonomic level, compute mean SSP values per EEZ
+# so that species with missing projections can borrow from relatives
+build_taxa_lookup <- function(df) {
+  tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
+
+  unique_climate <- df %>%
+    select(eez_iso3c, sciname_hs_modified, ssp126, ssp585,
+           genus, subfamily, family, order, class, phylum, kingdom, superclass) %>%
+    distinct()
+
+  map_dfr(tax_levels, function(level) {
+    unique_climate %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname_hs_modified, .keep_all = TRUE) %>%
+      group_by(eez_iso3c, !!sym(level)) %>%
+      summarise(
+        avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+}
+
+# Helper: walk up the taxonomic ladder and fill NA SSP values from the nearest
+# available ancestor within the same EEZ
+fill_with_higher_taxa <- function(df, lookup_table) {
+  tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
+
+  for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+
+    df <- df %>%
+      select(-taxa_level) %>%
+      left_join(
+        lookup_table %>% filter(taxa_level == level),
+        by = c("eez_iso3c", join_by_map)
+      ) %>%
+      mutate(
+        ssp126 = coalesce(ssp126, avg_ssp126),
+        ssp585 = coalesce(ssp585, avg_ssp585)
+      ) %>%
+      select(-avg_ssp126, -avg_ssp585)
+  }
+
+  df %>% select(-taxa_level)
+}
+
+build_exposure <- function(dir, portfolio = c("foreign", "total")) {
+  portfolio <- match.arg(portfolio)
+
+  consumption <- read_parquet(paste0(dir, "example_consumption_eez_2024_12_06.parquet")) %>%
+    mutate(sciname_hs_modified = coalesce(sciname_hs_modified, sciname))
+
+  sciname_taxa <- read_csv(paste0(dir, "sciname.csv"), show_col_types = FALSE) %>%
+    build_taxa_levels()
+
+  climate_by_spp_eez <- read_csv("../output/future_climate_joined.csv", show_col_types = FALSE) %>%
+    drop_na() %>%
+    group_by(eez_iso3c, sciname) %>%
+    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+
+  consumption_2019 <- consumption %>%
+    filter(year == 2019) %>%
+    left_join(sciname_taxa, by = c("sciname_hs_modified" = "sciname")) %>%
+    left_join(climate_by_spp_eez, by = c("eez_iso3c", "sciname_hs_modified" = "sciname"))
+
+  interpolated <- fill_with_higher_taxa(consumption_2019, build_taxa_lookup(consumption_2019)) %>%
+    mutate(
+      taxa_level = case_when(
+        sciname_hs_modified == kingdom    ~ "kingdom",
+        sciname_hs_modified == phylum     ~ "phylum",
+        sciname_hs_modified == superclass ~ "superclass",
+        sciname_hs_modified == class      ~ "class",
+        sciname_hs_modified == order      ~ "order",
+        sciname_hs_modified == family     ~ "family",
+        sciname_hs_modified == subfamily  ~ "subfamily",
+        sciname_hs_modified == genus      ~ "genus",
+        str_detect(sciname_hs_modified, " ") ~ "species"
+      ),
+      species = if_else(
+        str_count(sciname_hs_modified, " ") == 1,
+        word(sciname_hs_modified, 2),
+        NA_character_
+      )
+    )
+
+  write_parquet(interpolated, "../output/interpolated_future_data.parquet")
+
+  future_long <- interpolated %>%
+    pivot_longer(c(ssp126, ssp585), names_to = "scenario", values_to = "future_change_catch")
+
+  # Portfolio-specific row filter + catch-change multiplier
+  # Note: the two portfolios intentionally use different multiplier formulas —
+  # the foreign portfolio handles positive/negative/zero separately to preserve
+  # directionality; the total portfolio uses a single linear conversion.
+  stock_pre <- if (portfolio == "foreign") {
+    future_long %>%
+      filter(
+        consumer_iso3c != producer_iso3c,
+        !is.na(live_weight_t),
+        !is.na(future_change_catch)
+      ) %>%
+      mutate(future_change_catch = case_when(
+        future_change_catch > 0 ~ (future_change_catch / 100) + 1,
+        future_change_catch < 0 ~ 1 - ((future_change_catch / 100) * -1),
+        future_change_catch == 0 ~ 1
+      ))
+  } else {
+    future_long %>%
+      filter(!is.na(live_weight_t), !is.na(future_change_catch)) %>%
+      mutate(future_change_catch = 1 + (future_change_catch / 100))
+  }
+
+  stock_pre %>%
+    mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+    group_by(consumer_iso3c, scenario) %>%
+    summarise(
+      change_in_stock = sum(change_in_stock),
+      live_weight_t   = sum(live_weight_t),
+      .groups = "drop"
+    ) %>%
+    mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t))
+}
+```
+
+---
+
+# Step 3 — Sensitivity (per portfolio)
+
+Computes aquatic animal reliance as a share of total animal protein supply.
+
+- `"foreign"` — sums across all consumption sources (domestic + foreign) to
+  get total reliance.
+- `"total"` — retains only the `foreign` consumption source row (no
+  aggregation needed).
+
+```{r build-sensitivity}
+build_sensitivity <- function(dir, portfolio = c("foreign", "total")) {
+  portfolio <- match.arg(portfolio)
+
+  supply_importance <- read_csv(
+    paste0(dir, "sensitivity/fao_aquatic_reliance_source.csv"),
+    show_col_types = FALSE
+  )
+
+  base <- supply_importance %>%
+    filter(year == 2019, habitat == "marine", method == "capture", food_group == "aquatic")
+
+  if (portfolio == "foreign") {
+    base %>%
+      group_by(iso3c) %>%
+      summarise(aa_reliance_pct = sum(prop_animal_protein), .groups = "drop")
+  } else {
+    base %>%
+      filter(consumption_source == "foreign") %>%
+      select(iso3c, aa_reliance_pct = prop_animal_protein)
+  }
+}
+```
+
+---
+
+# Step 4 — Adaptive capacity (portfolio-agnostic)
+
+Loads all ten AC indicators across the four IPCC dimensions (Assets,
+Flexibility, Learning, Social Organization), standardises column names, and
+returns a single joined data frame keyed on `consumer_iso3c`.
+
+The `consuming_countries` argument (a vector of ISO3C codes) is passed in
+explicitly so this function has no hidden dependency on objects created in
+earlier steps.
+
+```{r build-adaptive-capacity}
+build_adaptive_capacity <- function(dir, consuming_countries) {
+
+  cc_df <- tibble(consumer_iso3c = consuming_countries, artis = 1)
+
+  # country_coverage() returns the ARTIS countries that are missing from a
+  # given AC dataset — useful for diagnosing coverage gaps
+  country_coverage <- function(data, join_by) {
+    full_join(cc_df, data %>% mutate(covered = 1), by = c("consumer_iso3c" = join_by)) %>%
+      filter(is.na(covered), artis == 1) %>%
+      pull(consumer_iso3c)
+  }
+
+  # --- Assets ---
+  sanitation <- read_csv(paste0(dir, "adaptive capacity/assets/sanitation.csv"), show_col_types = FALSE) %>%
+    filter(Indicator_Code == "SH_STA_BASS_ZS", Time_Period == 2019) %>%
+    rename(sanitation = Value, consumer_iso3c = Geography_Code) %>%
+    select(consumer_iso3c, sanitation)
+
+  gdp <- read_csv(paste0(dir, "adaptive capacity/assets/gdp.csv"), show_col_types = FALSE) %>%
+    select(consumer_iso3c = `Country Code`, gdp = `2019`) %>%
+    filter(!is.na(gdp))
+
+  trade_gdp <- read_csv(paste0(dir, "adaptive capacity/assets/trade_gdp.csv"), show_col_types = FALSE) %>%
+    filter(`Indicator Code` == "NE.TRD.GNFS.ZS") %>%
+    select(consumer_iso3c = `Country Code`, gdp_trade = `2019`) %>%
+    filter(!is.na(gdp_trade))
+
+  # --- Flexibility ---
+  life_expectancy <- read_csv(
+    paste0(dir, "adaptive capacity/flexibility/life_expectancy_at_birth.csv"),
+    show_col_types = FALSE
+  ) %>%
+    filter(`Indicator Code` == "SP.DYN.LE00.IN") %>%
+    select(consumer_iso3c = `Country Code`, life_expectancy = `2019`) %>%
+    filter(!is.na(life_expectancy))
+
+  supermarkets <- read_csv(
+    paste0(dir, "adaptive capacity/flexibility/supermarkets_per_100000.csv"),
+    show_col_types = FALSE
+  ) %>%
+    mutate(consumer_iso3c = countrycode(Region, origin = "country.name", destination = "iso3c")) %>%
+    select(consumer_iso3c, supermarkets = `2019`) %>%
+    filter(!is.na(supermarkets))
+
+  total_labor   <- read_csv(paste0(dir, "adaptive capacity/flexibility/total_labor_force.csv"), show_col_types = FALSE)
+  total_pop     <- read_csv(paste0(dir, "adaptive capacity/flexibility/total_population.csv"), show_col_types = FALSE) %>%
+    select(consumer_iso3c = `Country Code`, total_pop_2019 = `2019`)
+
+  prop_labor <- total_labor %>%
+    left_join(total_pop, by = c("Country Code" = "consumer_iso3c")) %>%
+    select(consumer_iso3c = `Country Code`, labor_2019 = `2019`, total_pop_2019) %>%
+    mutate(prop_labor = labor_2019 / total_pop_2019) %>%
+    filter(!is.na(prop_labor)) %>%
+    select(consumer_iso3c, prop_labor)
+
+  # --- Learning ---
+  hci <- read_csv(paste0(dir, "adaptive capacity/learning/HCIData.csv"), show_col_types = FALSE) %>%
+    filter(`Indicator Name` == "Human Capital Index (HCI) (scale 0-1)") %>%
+    select(consumer_iso3c = `Country Code`, hci = `2018`) %>%
+    filter(!is.na(hci))
+
+  # --- Social organization ---
+  gov_effectiveness <- read_csv(
+    paste0(dir, "adaptive capacity/social organization/government_effectiveness_percentile.csv"),
+    show_col_types = FALSE
+  ) %>%
+    filter(`Indicator ID` == "WB.WWGI.GE.PER.RNK") %>%
+    select(consumer_iso3c = `Economy ISO3`, gov_effectiveness = `2019`) %>%
+    filter(!is.na(gov_effectiveness))
+
+  fsc <- read_csv(
+    paste0(dir, "adaptive capacity/social organization/food-systems-dashboard-2025-03-04.csv"),
+    show_col_types = FALSE
+  ) %>%
+    filter(`Start Year` == 2019 | `End Year` == 2019) %>%
+    rename(fsc = Value, consumer_iso3c = ISO3) %>%
+    select(consumer_iso3c, fsc)
+
+  rol <- read_csv(
+    paste0(dir, "adaptive capacity/social organization/WB-WWGI.csv"),
+    show_col_types = FALSE
+  ) %>%
+    filter(Indicator == "Rule of Law: Percentile Rank") %>%
+    select(consumer_iso3c = `Economy ISO3`, rol = `2019`)
+
+  # Join all AC indicators
+  gdp %>%
+    left_join(trade_gdp,        by = "consumer_iso3c") %>%
+    left_join(sanitation,       by = "consumer_iso3c") %>%
+    left_join(supermarkets,     by = "consumer_iso3c") %>%
+    left_join(life_expectancy,  by = "consumer_iso3c") %>%
+    left_join(prop_labor,       by = "consumer_iso3c") %>%
+    left_join(hci,              by = "consumer_iso3c") %>%
+    left_join(gov_effectiveness, by = "consumer_iso3c") %>%
+    left_join(fsc,              by = "consumer_iso3c") %>%
+    left_join(rol,              by = "consumer_iso3c")
+}
+```
+
+---
+
+# Orchestrator — `build_e_s_ac_data()`
+
+Calls `build_exposure()`, `build_sensitivity()`, and
+`build_adaptive_capacity()` for a given portfolio type, joins the results, and
+writes the output parquet.
+
+```{r build-e-s-ac-data}
+build_e_s_ac_data <- function(portfolio = c("foreign", "total"), dir) {
+  portfolio <- match.arg(portfolio)
+  cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
+
+  exposure     <- build_exposure(dir, portfolio)
+  sensitivity  <- build_sensitivity(dir, portfolio)
+
+  consuming_countries <- exposure %>% distinct(consumer_iso3c) %>% pull()
+  adaptive_cap <- build_adaptive_capacity(dir, consuming_countries)
+
+  e_s_ac <- adaptive_cap %>%
+    right_join(sensitivity,  by = c("consumer_iso3c" = "iso3c")) %>%
+    left_join(exposure,      by = "consumer_iso3c")
+
+  out_path <- sprintf("../output/e_s_ac_data_%s.parquet", portfolio)
+  write_parquet(e_s_ac, out_path)
+  cat(sprintf("✅ Saved %s\n", out_path))
+
+  invisible(e_s_ac)
+}
+```

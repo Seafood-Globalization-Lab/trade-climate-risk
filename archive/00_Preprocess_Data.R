@@ -165,10 +165,18 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
   test_data <- left_join(consumption_sciname, df1,
                          by = c("eez_iso3c", "sciname_hs_modified" = "sciname"))
   
-  # ---- Function to compute taxa averages ----
+  # ---- Compute averages for each taxa level ---- 
+  # First, get unique species-climate combinations to avoid counting duplicates
+  unique_climate_data <- test_data %>%
+    select(eez_iso3c, sciname_hs_modified, ssp126, ssp585, 
+           genus, subfamily, family, order, class, phylum, kingdom, superclass) %>%
+    distinct()
+  
   compute_taxa_averages <- function(df, tax_level) {
     df %>%
       filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      # Make sure we only count each species once per EEZ
+      distinct(eez_iso3c, sciname_hs_modified, .keep_all = TRUE) %>%
       group_by(eez_iso3c, !!sym(tax_level)) %>%
       summarise(
         avg_ssp126 = mean(ssp126, na.rm = TRUE),
@@ -179,14 +187,14 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
       mutate(taxa_level = tax_level)
   }
   
-  # ---- Compute averages for each taxa level ----
+  # Compute averages using the unique data
   averages_list <- list(
-    compute_taxa_averages(test_data, "genus"),
-    compute_taxa_averages(test_data, "subfamily"),
-    compute_taxa_averages(test_data, "family"),
-    compute_taxa_averages(test_data, "order"),
-    compute_taxa_averages(test_data, "class"),
-    compute_taxa_averages(test_data, "phylum")
+    compute_taxa_averages(unique_climate_data, "genus"),
+    compute_taxa_averages(unique_climate_data, "subfamily"),
+    compute_taxa_averages(unique_climate_data, "family"),
+    compute_taxa_averages(unique_climate_data, "order"),
+    compute_taxa_averages(unique_climate_data, "class"),
+    compute_taxa_averages(unique_climate_data, "phylum")
   )
   
   lookup_table <- bind_rows(averages_list)
@@ -241,6 +249,8 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
         TRUE ~ NA_character_
       )
     )
+  
+  write_parquet(interpolated_future_data, "../output/interpolated_future_data.parquet")
   
   # Proportion of data that is covered by Juliano's climate projections (includes averaging)
   # up to higher taxa levels + trade flows (will differ from species/eez 
@@ -329,6 +339,9 @@ acquire_e_s_ac_data <- function(foreign = TRUE , directory_path  = "") {
     summarize(change_in_stock = sum(change_in_stock),
               live_weight_t = sum(live_weight_t)) %>%
     mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t))
+  
+  # Write to csv
+  write_csv(consumer_stock_change_pre, "../output/consumer_stock_change_pre.csv")
   
   # Write to csv
   write_csv(consumer_stock_change, "../output/consumer_stock_change.csv")
