@@ -53,6 +53,9 @@ This notebook:
 ## Connor's laptop path
 file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
 
+## Connor's desktop path
+file_path <- "C:/Users/cjqui/OneDrive/Desktop/SGL/Chapter 2/trade-climate-risk/data/"
+
 ## Jessica's path:
 # file_path <- ""
 ```
