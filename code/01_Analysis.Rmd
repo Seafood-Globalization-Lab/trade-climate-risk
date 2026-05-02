@@ -23,6 +23,7 @@ library(devtools)
 library(tidytext)
 library(ggsankey)
 library(exploreARTIS)
+library(gtools)
 ```
 
 # Objectives
@@ -44,49 +45,30 @@ This notebook:
 > **User input:** Set `file_path` to the root of your input data folder.
 > Everything else runs automatically.
 
-```{r user-input}
-# Set your path here
+## Calculate the risk index based on a country’s exposure, sensitivity, and adaptive capacity components.
+
+```{r load-working-directory}
+# Set working directory for pulling in data easily path here
+
+## Connor's laptop path
 file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
 
-# Jessica's path:
+## Jessica's path:
 # file_path <- ""
 ```
 
-```{r initialize functions}
-source("00_Preprocess_Data.R") # function that runs a script to acquire exposure, sensitivity, and adaptive capacity data
-source("R/create_map.R") # function for creating maps
-source("R/calculate_risk.R") # function for calculating risk
-# source("../R/sensitivity_analysis.R") # function for running a sensitivity analysis on adaptive capacity variables (Work in Progress)
-```
-
-## Calculate the risk index based on a country’s exposure, sensitivity, and adaptive capacity components.
-
-> Insert your path to get to your data file (line)
-
-```{r calculate risk}
-# Get exposure, sensitivty, and adaptive capacity data for entire portfolio
-e_s_ac_data_entire_portfolio <- acquire_e_s_ac_data(foreign = FALSE)
-
-# Get exposure, sensitivty, and adaptive capacity data for foreign imports
-e_s_ac_data <- acquire_e_s_ac_data(foreign = TRUE)
-
-# Calculate risk
-risk_overall <- calculate_risk(e_s_ac_data_entire_portfolio, coverage = "entire portfolio")
-
-risk_foreign_imports <- calculate_risk(e_s_ac_data, coverage = "foreign imports")
-  
-# Look at correlations between vulnerability and E + S + AC
-pairs(risk_foreign_imports[,2:5])
-cor_vals <- cor(risk_foreign_imports[,2:5])
-```
 
 ```{r load-functions}
-# Knitting 00_Preprocess_Data.Rmd loads all helper functions into this session
+# Knitting 00_Preprocess_Data.Rmd loads all helper functions for generating the exposure, sensitiviyty, adaptive capacity.
 knitr::knit("00_Preprocess_Data.Rmd", output = tempfile())
 
-source("../R/create_map.R")
-source("../R/calculate_risk.R")
-# source("../R/sensitivity_analysis.R")  # work in progress
+source("../utils/create_map.R") ## For creating maps
+source("../utils/calculate_vulnerability.R") ## For calculating vulnerability
+source("../utils/calculate_simulated_vulnerability.R") ## For calculating simulated vulnerability (sensitivity analysis)
+# source("../utils/sens_sensitivity_analysis.R")  ## Sensitivity analysis on the sensitivity measure (FIXIT: work in progress)
+source("../utils/exp_sensitivity_analysis.R") ## Sensitivity analysis on the exposure measure
+source("../utils/sens_ac_sensitivity_analysis.R") ## Sensitivity analysis on the exposure measure
+source("../utils/number_unique_combs.R")  # Calculate the different unique combinations given the number of features (Used in sensitivity analysis)
 ```
 
 ---
@@ -99,71 +81,288 @@ Run once per session — reads DBEM species files and writes
 if the underlying DBEM inputs change.
 
 ```{r preprocess-climate}
-preprocess_climate_data(dir = file_path)
+# preprocess_climate_data(dir = file_path)
 ```
 
 ---
 
-# Build E/S/AC datasets
+# Build Exposure / Sensitivity / Adaptive capacity datasets
 
-```{r build-esac-data}
-e_s_ac_foreign  <- build_e_s_ac_data("foreign", dir = file_path)
-e_s_ac_total    <- build_e_s_ac_data("total",   dir = file_path)
+This pulls from the *00_Preprocess_Data.Rmd* file
+
+```{r build-e_s_ac-data}
+# Build e/s/ac datasets
+
+## Build exposure / Sensitivity / Adaptive capacity dataset for total consumption (no gapfilling)
+
+### Only run if file exists
+if (!file.exists("../output/e_s_ac/e_s_ac_total_none_gapfill.parquet")) {
+  e_s_ac_total_no_gapfill    <- build_e_s_ac_data(portfolio = "total",
+                                                dir = file_path,
+                                                gap_filling_method = "none")
+} else {
+  e_s_ac_total_no_gapfill <- read_parquet("../output/e_s_ac/e_s_ac_total_none_gapfill.parquet")
+}
+
+## Build Exposure / Sensitivity / Adaptive capacity dataset for total consumption (eez --> region gapfilling)
+
+if (!file.exists("../output/e_s_ac/e_s_ac_total_region_gapfill.parquet")) {
+  e_s_ac_total_region_gapfill    <- build_e_s_ac_data(portfolio = "total",
+                                                dir = file_path,
+                                                gap_filling_method = "region")
+} else {
+  e_s_ac_total_region_gapfill <- read_parquet("../output/e_s_ac/e_s_ac_total_region_gapfill.parquet")
+}
+
+## Build Exposure / Sensitivity / Adaptive capacity dataset for total consumption (eez --> realm gapfilling)
+if (!file.exists("../output/e_s_ac/e_s_ac_total_realm_gapfill.parquet")) {
+  e_s_ac_total_realm_gapfill    <- build_e_s_ac_data(portfolio = "total",
+                                                dir = file_path,
+                                                gap_filling_method = "realm")
+} else {
+  e_s_ac_total_realm_gapfill <- read_parquet("../output/e_s_ac/e_s_ac_total_realm_gapfill.parquet")
+}
 ```
-
 ---
 
-# Calculate risk
+# Calculate climate vulnerability
 
-```{r calculate-risk}
-risk_foreign  <- calculate_risk(e_s_ac_foreign, coverage = "foreign imports")
-risk_total    <- calculate_risk(e_s_ac_total,   coverage = "entire portfolio")
+This pulls from the *calculate_vulnerability.R* file.
+
+```{r calculate-vulnerability}
+source("../utils/calculate_vulnerability.R") ## For calculating vulnerability
+
+# Calculate climate vulnerability of total consumption (no gapfilling)
+vuln_total_no_gapfill <- calculate_vulnerability(e_s_ac_total_no_gapfill,   coverage = "entire portfolio")
+
+# Calculate climate vulnerability of total consumption (eez --> region gapfilling)
+vuln_total_realm_gapfill    <- calculate_vulnerability(e_s_ac_total_realm_gapfill,   coverage = "entire portfolio")
+
+# Calculate climate vulnerability of total consumption (eez --> realm gapfilling)
+vuln_total_region_gapfill    <- calculate_vulnerability(e_s_ac_total_region_gapfill,   coverage = "entire portfolio")
+
 ```
 
+```{r FIXIT delete}
+create_map(data = vuln_total_no_gapfill, fill = "vulnerability", country.col.name = "consumer_iso3c")
+
+create_map(data = vuln_total_region_gapfill, fill = "vulnerability", country.col.name = "consumer_iso3c")
+
+create_map(data = vuln_total_realm_gapfill, fill = "vulnerability", country.col.name = "consumer_iso3c")
+
+
+# hist(round(vuln_total_no_gapfill$sensitivity,2))
+```
+
+# Sensitivity analyis
+
+## Analyze the sensitivity of different exposure measures
+
+```{r exposure measurement: sensitivity analysis}
+# Create a list out of the different exposure calculations
+exp_list <- list(vuln_total_no_gapfill$exposure, vuln_total_region_gapfill$exposure, vuln_total_realm_gapfill$vulnerability)
+
+# Run sensitivity analysis
+dir_probs_matrix <- exp_sensitivity_analysis(exp_list = exp_list)-
+
+# Plot the correlation between methods of exposure.
+(plot <- data.frame(dir_probs_matrix) %>%
+  drop_na() %>%
+    mutate(combination = factor(combination)) %>%
+  mutate(combination = case_when( # Change code for how many exposure methods are being compared
+    combination == 1 ~ "None vs region",
+    combination == 2 ~ "None vs realm",
+    combination == 3 ~ "Region vs realm"
+    )
+  ) %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = combination)) +
+  geom_line() +
+  facet_wrap(~ combination) +
+  labs(y = "Kendall tau correlation", x = "Dirichlet-assigned weight for focal exposure method", fill = "Variable", title = "Sensitivity of exposure score") +
+  theme_cowplot() +
+  guides(color = "none") +
+  theme(axis.text = element_text(size = 8),
+        plot.title = element_text(hjust = 0.5)) +
+    annotate("text", label = "Min") +
+  scale_color_viridis_d(
+    option = "plasma",
+    end = 0.8
+  ))
+
+
+ggsave("../images/exploratory/sensitiity_analysis_exposure.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+## Sensitivity analysis of sensitivity measure
+
+```{r sensitivity measurement: sensitivity analysis}
+# Run sensitivity analysis
+dir_probs_matrix_sensitivity <- sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                                                             analysis = "sensitivity")
+
+plot <- dir_probs_matrix_sensitivity %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var),
+         var = case_when(var == "1" ~ "Foreign reliance (%)",
+                         var == "2" ~ "Marine capture reliance (%)")) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal sensitivity variable", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_sensitivity.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+## Sensitivity analysis on adaptive capacity variables
+
+### Variables within adaptive capacity
+
+```{r adaptive capacity measurement: sensitivity analysis}
+dir_probs_matrix_ac_variables <- sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                                                             analysis = "adaptive_capacity_variables")
+
+plot <- dir_probs_matrix_ac_variables %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var),
+         var = case_when(var == "1" ~ "GDP per capita",
+                         var == "2" ~ "Trade (% of GDP)",
+                         var == "3" ~ "Sanitation",
+                         var == "4" ~ "Supermarkets",
+                         var == "5" ~ "Life expectancy",
+                         var == "6" ~ "Proportion labor force",
+                         var == "7" ~ "Human capacity index",
+                         var == "8" ~ "Government effectiveness",
+                         var == "9" ~ "Food safety capacity",
+                         var == "10" ~ "Rule of law")) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 8),
+          strip.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal adaptive capacity variable", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_adaptive_capacity_variables.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+### Components within adaptive capacity
+
+```{r}
+dir_probs_matrix_ac_components <- 
+  sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                               analysis = "adaptive_capacity_components")
+
+plot <- dir_probs_matrix_ac_components %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var)) %>%
+  mutate(var = case_when(
+         var == "1" ~ "Assets",
+         var == "2" ~ "Flexibility",
+         var == "3" ~ "Social Organization",
+         var == "4" ~ "Learning"),
+         dirichlet_prob = case_when(
+           var != "Learning" ~ dirichlet_prob * 3,
+           TRUE ~ dirichlet_prob
+         )) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 8),
+          strip.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal adaptive capacity component", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_adaptive_capacity_components.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+
+
+# Analyze CV of different inerpolation by taxonomic level, by eez 
+
+```{r}
+consumption_mpc_realm <- read_parquet("../output/future_catch_joined_consumption/interpolated_future_data_realm_gapfill.parquet")
+
+consumption_mpc_region <- read_parquet("../output/future_catch_joined_consumption/interpolated_future_data_region_gapfill.parquet")
+
+
+
+consumption_mpc_region %>%
+  mutate(
+      gapfill_method_level = case_when(
+        gapfill_method == "eez_gapfill" & gapfill_level == "subfamily" ~ "EEZ: Subfamily",
+        gapfill_method == "eez_gapfill" & gapfill_level == "genus" ~ "EEZ: Genus",
+        gapfill_method == "eez_gapfill" & gapfill_level == "family" ~ "EEZ: Family",
+        gapfill_method == "eez_gapfill" & gapfill_level == "order" ~ "EEZ: Order",
+        gapfill_method == "eez_gapfill" & gapfill_level == "class" ~ "EEZ: Class",
+        gapfill_method == "eez_gapfill" & gapfill_level == "phylum" ~ "EEZ: Phylum",
+        
+        gapfill_method == "reigon_gapfill" & gapfill_level == "subfamily" ~ "Region: Subfamily",
+        gapfill_method == "region_gapfill" & gapfill_level == "genus" ~ "Region: Genus",
+        gapfill_method == "region_gapfill" & gapfill_level == "family" ~ "Region: Family",
+        gapfill_method == "region_gapfill" & gapfill_level == "order" ~ "Region: Order",
+        gapfill_method == "region_gapfill" & gapfill_level == "class" ~ "Region: Class",
+        gapfill_method == "region_gapfill" & gapfill_level == "phylum" ~ "Region: Phylum",
+        gapfill_method == "Gapfill not needed" ~ "No gapfill needed",
+        gapfill_method == "Unsuccessful gapfill" ~ "Unsuccessful gapfill"
+      ),
+      gapfill_method_level = factor(
+        gapfill_method_level,
+        levels = c(
+          "EEZ: Genus",
+          "EEZ: Subfamily",
+          "EEZ: Family",
+          "EEZ: Order",
+          "EEZ: Class",
+          "EEZ: Phylum",
+          "Region: Genus",
+          "Region: Subfamily",
+          "Region: Family",
+          "Region: Order",
+          "Region: Class",
+          "Region: Phylum",
+          "No gapfill needed",
+          "Unsuccessful gapfill"
+        )
+      )) %>%
+  drop_na(ssp126) %>%
+  filter(!taxa_level == "species") %>%
+  group_by(eez_iso3c, sciname)  %>%
+  summarize(sd = sd(ssp126, na.rm = TRUE))
+    asummarize(cv = mean(ssp126, na.rm = TRUE) / sd(ssp126, na.rm = TRUE))
+
+consumption_mpc_region %>% distinct(taxa_level)
+  
+y %>%
+  summarize(cv = mean(ssp126, na.rm = TRUE) / sd(ssp126, na.rm = TRUE))
+
+consumption_mpc_region %>% count(gapfill_method)
+```
+
+  
 ---
 
 # Diagnostics — correlations between risk components
 
 ```{r risk-correlations}
-pairs(risk_foreign[, 2:5])
-cor(risk_foreign[, 2:5])
-```
+pairs(vuln_total_no_gapfill[, 2:5])
+pairs(vuln_total_region_gapfill[, 2:5])
+pairs(vuln_total_realm_gapfill[, 2:5])
 
----
+cor(vuln_total_no_gapfill[, 2:5])[1,] # row selected: exposure
+cor(vuln_total_region_gapfill[, 2:5])[1,] # row selected: exposure
+cor(vuln_total_realm_gapfill[, 2:5])[1,] # row selected: exposure
 
-# Sensitivity analysis on adaptive capacity variables
-
-> Note: still a work in progress — results may not be reliable yet.
-
-```{r sensitivity-analysis, eval=FALSE}
-# sensitivity_analysis(data = e_s_ac_foreign, risk_data = risk_foreign)
-# sensitivity_analysis(data = e_s_ac_total,   risk_data = risk_total)
-```
-
----
-
-# Coverage diagnostics
-
-Checks how much of the 2019 consumption data is covered by the interpolated
-DBEM climate projections.
-
-```{r coverage-diagnostics}
-consumption_2019 <- read_parquet(paste0(file_path, "example_consumption_eez_2024_12_06.parquet")) %>%
-  filter(year == 2019) %>%
-  group_by(consumer_iso3c, sciname_hs_modified) %>%
-  summarise(live_weight_t = sum(live_weight_t), .groups = "drop")
-
-future_changes <- read_parquet("../output/interpolated_future_data.parquet")
-
-coverage_check <- consumption_2019 %>%
-  left_join(
-    future_changes %>%
-      select(consumer_iso3c, sciname_hs_modified, ssp126) %>%
-      distinct() %>%
-      filter(!is.na(ssp126)),
-    by = c("consumer_iso3c", "sciname_hs_modified")
-  )
-
-# Proportion of rows with climate projection coverage
-mean(!is.na(coverage_check$ssp126))
+hist(e_s_ac_total_realm_gapfill$pct_change)
 ```

@@ -1,0 +1,653 @@
+---
+title: "Validation Checks"
+author: "Connor Quiroz"
+date: "2026-04-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+
+# remotes::install_github("ropensci/rfishbase")
+library(rfishbase)
+```
+
+```{r load in functions}
+# Loads functions needed to import SAU dataall helper functions into this session
+knitr::knit("00_Preprocess_Data.Rmd", output = tempfile())
+```
+
+```{r user-input}
+# Set your path here
+file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
+
+# Jessica's path:
+# file_path <- ""
+
+dir <- file_path
+```
+
+# Purpose
+
+This file is for testing and analyzing data for quality checks that may not go in the final code
+
+# Sea Around Us (SAU) maximum catch potential (mcp) projection data assessment
+
+## Is Juliano's data complete? And if not, what's missing from the data
+
+```{r}
+# Load in file names and species names acquired from the sau mcp data
+file_names <- readRDS("../data/exposure/utils/file_names.rds")
+species_names <- readRDS("../data/exposure/utils/species_names.rds")
+
+# ---- File integrity diagnostic ----
+
+filename_keys <- as.integer(str_extract(basename(file_names), "\\d+"))
+
+# Scan all files once, collecting all needed info in a single pass
+file_scan <- map_dfr(file_names, function(f) {
+  df_i <- fread(f, colClasses = list(character = c("eez_name", "ssp")))
+  filename_key <- as.integer(str_extract(basename(f), "\\d+"))
+  
+  if (nrow(df_i) == 0) {
+    return(tibble(filename_key = filename_key, actual_key = NA_integer_, n_rows = 0L, found_in_file = basename(f)))
+  }
+  
+  tibble(filename_key = filename_key, actual_key = unique(df_i$taxon_key), n_rows = nrow(df_i), found_in_file = basename(f))
+})
+
+# No file at all
+no_file <- species_names %>% 
+  filter(!taxon_key %in% filename_keys) %>%
+  as_tibble() %>%
+  mutate(issue = "no file", found_in_file = NA_character_)
+
+# Empty files
+empty_files <- file_scan %>%
+  filter(n_rows == 0) %>%
+  left_join(as_tibble(species_names), by = c("filename_key" = "taxon_key")) %>%
+  mutate(issue = "empty file") %>%
+  select(taxon_key = filename_key, taxon_name, issue, found_in_file)
+
+# Mismatched keys — also check if no_file species are hiding in these files
+mismatched <- file_scan %>%
+  filter(n_rows > 0, filename_key != actual_key) %>%
+  left_join(as_tibble(species_names), by = c("actual_key" = "taxon_key")) %>%
+  mutate(issue = "mismatched key") %>%
+  select(taxon_key = actual_key, taxon_name, issue, found_in_file)
+
+# Check if any no_file species are hiding inside mismatched files
+no_file_found <- no_file %>%
+  filter(taxon_key %in% mismatched$taxon_key) %>%
+  left_join(mismatched %>% select(taxon_key, found_in_file), by = "taxon_key") %>%
+  mutate(issue = "no file — found in mismatched file")
+
+no_file_not_found <- no_file %>%
+  filter(!taxon_key %in% mismatched$taxon_key)
+
+# Get the files which have no data themselves and contain files from another species id
+mismatched_origin_file <- gsub(c("percentage_change_"), "", mismatched$found_in_file) 
+mismatched_origin_file <- as.numeric (gsub(".csv", "", mismatched_origin_file))
+
+mismatched_origin_file <- species_names %>%
+  filter(
+    taxon_key %in% 
+           species_names$taxon_key[species_names$taxon_key %in% mismatched_origin_file]
+  )
+
+# Correct files
+correct <- species_names %>%
+  as_tibble() %>%
+  filter(
+    taxon_key %in% filename_keys,
+    !taxon_key %in% empty_files$taxon_key,
+    !taxon_key %in% mismatched$taxon_key,
+    !taxon_key %in% mismatched_origin_file$taxon_key
+  ) %>%
+  mutate(issue = "correct", found_in_file = NA_character_)
+
+# Summary
+cat("Exposure data quality__________________________________________________________________", "\n")
+cat("No file (truly missing):                                                           ", nrow(no_file_not_found), "\n")
+cat("File unavailable, but data found in other file:                                    ", nrow(mismatched), "\n")
+cat("File available, but contains another species data (original data is nowhere else): ", nrow(mismatched_origin_file), "\n")
+cat("Empty file:                                                                        ", nrow(empty_files), "\n")
+cat("Incorrect:                                                                         ", nrow(no_file_not_found) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file), "\n")
+cat("Correct:                                                                           ", nrow(correct), "\n")
+cat("Total accounted for:                                                               ", nrow(no_file_not_found) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file) + nrow(correct), "\n")
+cat("Total in species_names:                                                            ", nrow(species_names), "\n")
+
+# Full breakdown table
+# bind_rows(no_file_not_found, no_file_found, empty_files, mismatched, correct) %>%
+#   select(taxon_key, taxon_name, issue, found_in_file) %>%
+#   arrange(issue, taxon_key)
+```
+
+> Currently of the `r nrow(species_names)` species Juliano sent, there are `r nrow(no_file_not_found)` truly missing, `r nrow(empty_files)` with empty files, `r nrow(mismatched)` with mismatched keys, and `r nrow(correct)` species 
+
+
+
+
+```{r Jessica / Connor Meeting }
+# Join consumption data to catch projections
+  consumption_mpc <- consumption %>%
+    left_join(sciname_taxa, by = c("sciname" = "sciname")) %>%
+    left_join(climate_by_spp_eez, by = c("eez_iso3c", "sciname" = "sciname"))
+
+
+consumption_mpc %>% filter(str_detect(sciname, " "),
+                           is.na(ssp126))
+
+# Mismatches between species names 
+consumption_mpc %>% filter(str_detect(sciname, " "),
+                           is.na(ssp126)) %>%
+  group_by(sciname, eez_iso3c) %>%
+  summarize(sum = sum(live_weight_t)) %>%
+  arrange(-sum)
+
+consumption_mpc  %>%
+  filter(sciname == "scomber scombrus",
+         eez_iso3c == "GBR")
+  distinct(sciname, eez_iso3c)
+```
+
+
+## How many of Juliano's current species names match with ARTIS naming?
+```{r assess species alignment of SAU data to ARTIS}
+# Load in data
+
+## Filter ARTIS consumption data to only species (2019 marine capture) 
+consumption <- read_parquet(paste0(file_path, "example_consumption_eez_2024_12_06.parquet")) %>%
+    filter(year == 2019, habitat == "marine", method == "capture")
+
+## Read in ARTIS Sciname data
+  sciname_taxa <- read_csv(paste0(dir, "sciname.csv"), show_col_types = FALSE)
+    # build_taxa_levels()
+
+## Load in future catch projections data
+### For each species, average mcp projections across territories with an EEZ
+  climate_by_spp_eez <- read_csv("../output/future_climate_joined.csv", show_col_types = FALSE) %>%
+    drop_na() %>%
+    group_by(eez_iso3c, sciname) %>%
+    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+
+## Get list of unique species in 2019 marine capture ARTIS consumption data
+consumption_species_list <- consumption %>% # Filter to only species names
+  distinct(sciname)
+
+## Get list of unique species in sciname
+sciname_species <- sciname_taxa %>% filter(str_detect(sciname, " ")) %>% pull(sciname)
+
+
+# Data assessment
+## Which of Juliano's species are not matching to ARTIS?
+unaligned_names <- correct$taxon_name[!str_to_lower(correct$taxon_name) %in% consumption_species_list$sciname]
+
+# Correct Juliano's species names that aren't aligned with Fishbase / Sealifebase
+
+## Fishbase corrections
+fb_corrections <- validate_names(species_list = unaligned_names, serve = "fishbase", version = "24.07") %>% suppressMessages()
+
+## SeaLifeBase corrections
+slb_corrections <- validate_names(species_list = unaligned_names, serve = "sealifebase", version = "24.07") %>% suppressMessages()
+
+## Join corrections together
+corrections <- na.omit(fb_corrections) %>% append(na.omit(slb_corrections))
+
+##### Create lookup table
+  ##### (str_to_lower had to be done here becaue fb/slb lookup tables are uppercase)
+  correction_lookups <- setNames(corrections %>% str_to_lower(), unaligned_names %>% str_to_lower())
+
+# Correct catch projection data
+climate_by_spp_eez_corrected <- climate_by_spp_eez %>%
+  mutate(sciname = ifelse(
+    sciname %in% names(correction_lookups),
+    correction_lookups[sciname],
+    NA
+  )) %>%
+    drop_na(sciname)
+
+climate_by_spp_eez_combined <- bind_rows(
+  climate_by_spp_eez, climate_by_spp_eez_corrected
+  ) %>%
+    group_by(eez_iso3c, sciname) %>%
+    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop") ### For each species, average mcp projections across territories with an EEZ
+
+# Assess data coverage improvements post naming corrections
+
+## Which Juliano's *corrected* species are not matching to ARTIS consumption 2019 data?
+num_sp_post_corrections_cons <- corrections[!str_to_lower(corrections) %in% consumption$sciname] %>% unique() %>% length()
+
+## Which Juliano's *corrected* species are not matching to ARTIS sciname data?
+num_sp_post_corrections_sciname <- corrections[!str_to_lower(corrections) %in% sciname_species] %>% length()
+
+## See which values in my vector are equal to one another
+  for (i in 1:length(corrections)) {
+     z <- which(corrections[i] == corrections)
+     current_idx <- 0
+     
+     if (length(z) > 1) {
+       idx <- z
+        if (all(idx != current_idx)) { # only run if there is a new index found (this doesn't work, doesn't need to work, just run if there's a match)
+         cat("Species that are matched to the same corrected name: ", unaligned_names[idx])
+         cat("\n")
+         cat("Species correction destination: ", corrections[idx[1]], "\n")
+        }
+       # current_idx <- idx
+     }
+     
+    
+  }
+
+# Join consumption data to catch projections
+  consumption_mpc <- consumption %>%
+    left_join(sciname_taxa, by = c("sciname" = "sciname")) %>%
+    left_join(climate_by_spp_eez_combined, by = c("eez_iso3c", "sciname" = "sciname"))
+
+# Totals: What After naming correction methods, how many species do Juliano's cover?
+
+## Subtract number of naming errors (i.e., species that were not joined to ARTIS) from the files with upfront "no data value / file errors" to get the number of Juliano's correct species that originally join to ARTIS
+cat("Number of Juliano's species that correctly join to ARTIS (before correction): ", nrow(correct) - length(unique(corrections)))
+
+cat("Number of Juliano's species that correctly join to ARTIS (before correction): ", nrow(correct) - num_sp_post_corrections_cons)
+
+cat("Number of species that were added into 2019 consumption data: ", length(unique(corrections)) - num_sp_post_corrections_cons, "\n")
+
+# Total rows: How many are missing?
+
+## Number of missing rows from uncorrected data
+num_rows <- nrow(consumption %>% distinct(eez_iso3c, sciname)) - anti_join(consumption, climate_by_spp_eez, by = c("eez_iso3c", "sciname")) %>% distinct(eez_iso3c, sciname) %>% nrow()
+
+cat("Number of rows filled in (no corrections): ", num_rows, "; ", round(num_rows / nrow(consumption %>% distinct(eez_iso3c, sciname)) * 100,1), "% data coverage of ", consumption %>% distinct(sciname, eez_iso3c) %>% nrow(), " total pairs" )
+
+## Number of missing rows from corrected data
+num_rows <- nrow(consumption %>% distinct(eez_iso3c, sciname)) - anti_join(consumption, climate_by_spp_eez_combined, by = c("eez_iso3c", "sciname")) %>% distinct(eez_iso3c, sciname) %>% nrow()
+ 
+cat("Number of rows filled in (no corrections): ", num_rows, "; ", round(num_rows / nrow(consumption %>% distinct(eez_iso3c, sciname)) * 100,1), "% data coverage of ", consumption %>% distinct(sciname, eez_iso3c) %>% nrow(), " total pairs" )
+```
+
+```{r Testing gapfill function}
+# Helper: for each higher taxonomic level, compute mean SSP values per EEZ
+# so that species with missing projections can borrow from relatives
+build_taxa_lookup <- function(df) {
+  tax_levels <- c("genus", "subfamily", "family", "order", "class", "superclass","phylum")
+
+  unique_climate <- df %>%
+    select(eez_iso3c, sciname, ssp126, ssp585,
+           genus, subfamily, family, order, class, phylum, kingdom, superclass) %>%
+    distinct()
+
+  # For each taxa in an EEZ, compute the average ssp126 / 585 value for all species within in the taxa
+  
+  # Alternate: Build averages by region to gapfill if there is no neighbor found within an EEZ
+  eez_gapfills <- map_dfr(tax_levels, function(level) {
+    unique_climate %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      group_by(eez_iso3c, !!sym(level)) %>%
+      summarise(
+        eez_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        eez_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  region_gapfills <- map_dfr(tax_levels, function(level) {
+    unique_climate %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      add_region("eez_iso3c", "region") %>%
+      group_by(region, !!sym(level)) %>%
+      summarise(
+        region_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        region_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  return(list(
+    eez_gapfills = eez_gapfills,
+    region_gapfills = region_gapfills
+  ))
+      
+}
+
+# Helper: walk up the taxonomic ladder and fill NA SSP values from the nearest
+# available ancestor within the same EEZ
+fill_with_higher_taxa <- function(df, lookup_table) {
+  tax_levels <- c("genus", "subfamily", "family", "order", "class", "superclass", "phylum")
+
+  df <- df %>% mutate(gapfill_level = NA_character_, gapfill_method = NA_character_)
+  
+  # Run through EEZ averaged gapfilling first
+  for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+
+    df <- df %>%
+      select(-taxa_level) %>%
+      ## Join data to EEZ interpolated data
+      left_join(
+        lookup_table$eez_gapfills %>% filter(taxa_level == level),
+        by = c("eez_iso3c", join_by_map)
+      ) %>%
+      ## Conduct EEZ gapfills
+      ### Only assign the gapfill method if there was actually a gapfill occurring
+      ### Only assign the taxonomic level for which the gapfill was performed at
+      ### if a gapfill occurred
+      mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(eez_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(eez_avg_ssp126) ~ "eez_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, eez_avg_ssp126),
+        ssp585 = coalesce(ssp585, eez_avg_ssp585),
+      ) %>%
+      select(-eez_avg_ssp126, -eez_avg_ssp585)
+  }
+  
+  # Run through Region averaged gapfilling second
+  
+  for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+    
+    if (level == "genus") { # Only do on first loop iteration
+      df <- df %>%
+        add_region("eez_iso3c", "region")
+    }
+    
+    df <- df %>%
+      select(-taxa_level) %>%
+    # Join data to Region interpolated data
+      left_join(
+        lookup_table$region_gapfills %>% filter(taxa_level == level),
+        by = c("region", join_by_map)
+      ) %>%
+        mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(region_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(region_avg_ssp126) ~ "regional_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, region_avg_ssp126),
+        ssp585 = coalesce(ssp585, region_avg_ssp585),
+      ) %>%
+      select(-region_avg_ssp126, -region_avg_ssp585)  
+  }
+  
+  # Post gapfilling, delineate whether the gapfilling
+  # was not needed or was unable to e performed
+  
+  df <- df %>%
+    mutate(gapfill_method = case_when(
+      !is.na(ssp126) & is.na(gapfill_method) ~ "Gapfill not needed",
+      is.na(ssp126) ~ "Unsuccessful gapfill",
+      TRUE ~ gapfill_method
+    ),
+    gapfill_level = case_when(
+      !is.na(ssp126) & is.na(gapfill_level) ~ "Gapfill not needed",
+      is.na(ssp126) ~ "Unsuccessful gapfill",
+      TRUE ~ gapfill_level
+    )
+    )
+  
+  # Perform final data cleaning
+  df %>% select(-taxa_level) %>%
+    mutate(gapfill_level = factor(gapfill_level, levels = c("genus", "subfamily", "family", "class", "order", "phylum")))
+  
+}
+
+# Build test interpolated data
+test_interpolated <- fill_with_higher_taxa(consumption_mpc, build_taxa_lookup(consumption_mpc))
+
+# What is the data coverage of the interpolated data?
+
+## Calculate the total number of rows in consumption data
+total_rows <- nrow(consumption_mpc)
+
+## Get the number of interpolatd rows
+interpolated_rows <- test_interpolated %>%
+  # filter(str_detect(sciname, " ")) %>%
+  filter(!is.na(ssp126)) %>%
+  nrow()
+
+
+# Decide on gapfill method
+# Check compare the variance between individual EEZ's and at the region level before vs after gapfilling?
+
+## Before gapfilling
+
+### EEZ
+consumption_mpc %>%
+  group_by(eez_iso3c, taxa_level) %>%
+  summarize(var = var(ssp126, na.rm = TRUE)) %>%
+  add_region("eez_iso3c", "region") %>%
+  filter(taxa_level == "species") %>%
+  ggplot(aes(x = eez_iso3c, y = var)) +
+  geom_col() +
+  facet_wrap(~ region, scales = "free") +
+  theme(axis.text = element_text(size = 5, angle = 90)) +
+  labs(x = "EEZ iso3c", y = "Variance in Maximum catch potential across species")
+
+### Region level
+consumption_mpc %>%
+  add_region("eez_iso3c", "region") %>%
+  group_by(region, taxa_level) %>%
+  summarize(var = var(ssp126, na.rm = TRUE)) %>%
+  filter(taxa_level == "species") %>%
+  ggplot(aes(x = region, y = var)) +
+  geom_col() +
+  labs(x = "EEZ iso3c", y = "Variance in Maximum catch potential across species")
+
+## Check variances after gapfilling
+
+### Interpolate using regional taxa data
+test_interpolated %>%
+  filter(gapfill_method == "eez_gapfill") %>%
+  group_by(eez_iso3c, gapfill_level) %>%
+  summarize(var = var(ssp126, na.rm = TRUE)) %>%
+  add_region("eez_iso3c", "region") %>%
+  ggplot(aes(x = eez_iso3c, y = var, fill = gapfill_level)) +
+  geom_col() +
+  facet_wrap(~ region, scales = "free") +
+  theme(axis.text = element_text(size = 5, angle = 90)) +
+  labs(x = "EEZ iso3c", y = "Variance in Maximum catch potential across species") +
+  scale_fill_viridis_d(end = 0.95) +
+  facet_wrap(~ region, scales = "free")
+
+### Interpolate using regional taxa data
+test_interpolated %>%
+  group_by(eez_iso3c, gapfill_level, gapfill_method) %>%
+  summarize(var = var(ssp126, na.rm = TRUE)) %>%
+  filter(gapfill_method == "regional_gapfill") %>%
+  add_region("eez_iso3c", "region") %>%
+  ggplot(aes(x = eez_iso3c, y = var, fill = gapfill_level)) +
+  geom_col() +
+  # facet_wrap(~ region, scales = "free") +
+  theme(axis.text = element_text(size = 5, angle = 90)) +
+  labs(x = "EEZ iso3c", y = "Variance in Maximum catch potential across species") +
+  scale_fill_viridis_d(end = 0.95) +
+  facet_wrap(~ region, scales = "free")
+  
+  # How much gapfilling was used at each taxonomic level?
+  (plot <- consumption_mpc_realm %>%
+    # filter(gapfill_method %in% c("eez_gapfill", "regional_gapfill")) %>%
+    mutate(
+      gapfill_method_level = case_when(
+        gapfill_method == "eez_gapfill" & gapfill_level == "subfamily" ~ "EEZ: Subfamily",
+        gapfill_method == "eez_gapfill" & gapfill_level == "genus" ~ "EEZ: Genus",
+        gapfill_method == "eez_gapfill" & gapfill_level == "family" ~ "EEZ: Family",
+        gapfill_method == "eez_gapfill" & gapfill_level == "order" ~ "EEZ: Order",
+        gapfill_method == "eez_gapfill" & gapfill_level == "class" ~ "EEZ: Class",
+        gapfill_method == "eez_gapfill" & gapfill_level == "phylum" ~ "EEZ: Phylum",
+        
+        gapfill_method == "realm_gapfill" & gapfill_level == "subfamily" ~ "Realm: Subfamily",
+        gapfill_method == "realm_gapfill" & gapfill_level == "genus" ~ "Realm: Genus",
+        gapfill_method == "realm_gapfill" & gapfill_level == "family" ~ "Realm: Family",
+        gapfill_method == "realm_gapfill" & gapfill_level == "order" ~ "Realm: Order",
+        gapfill_method == "realm_gapfill" & gapfill_level == "class" ~ "Realm: Class",
+        gapfill_method == "realm_gapfill" & gapfill_level == "phylum" ~ "Realm: Phylum",
+        gapfill_method == "Gapfill not needed" ~ "No gapfill needed",
+        gapfill_method == "Unsuccessful gapfill" ~ "Unsuccessful gapfill"
+      ),
+      gapfill_method_level = factor(
+        gapfill_method_level,
+        levels = c(
+          "EEZ: Genus",
+          "EEZ: Subfamily",
+          "EEZ: Family",
+          "EEZ: Order",
+          "EEZ: Class",
+          "EEZ: Phylum",
+          "Realm: Genus",
+          "Realm: Subfamily",
+          "Realm: Family",
+          "Realm: Order",
+          "Realm: Class",
+          "Realm: Phylum",
+          "No gapfill needed",
+          "Unsuccessful gapfill"
+        )
+      )
+    ) %>%
+    group_by(eez_iso3c, gapfill_method_level) %>%
+    # summarize(n = n_distinct(sciname), .groups = "drop") %>%
+    group_by(eez_iso3c) %>%
+    mutate(prop = n / sum(n)) %>%
+    add_region("eez_iso3c", "region") %>%
+    ggplot(aes(y = gapfill_method_level, x = eez_iso3c, fill = prop)) +
+    geom_tile() +
+    scale_fill_viridis_c() +
+    labs(x = "EEZ iso3c", fill = "Proportion") +
+    facet_grid(. ~ region, scales = "free_x", space = "free_x") +
+    theme_cowplot() +
+    theme(legend.position = "bottom",
+            axis.title.y = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 5.4),
+          strip.text.x = element_text(size = 8),
+         legend.key.size       = unit(.6, "cm"),
+         legend))
+    
+  
+  
+  # Save plot
+    ggsave(
+      filename = paste0("../images/exploratory/gapfilling_coverage_region", ".jpg"),
+      plot     = plot,
+      device   = "jpg",
+      width    = 15,
+      height   = 6,
+      units    = "in",
+      dpi = 1000
+    )
+
+  
+# Add in superclass grouping
+### Varianes appear similar, so I will move forward with interpolating via region.
+
+    sciname_taxa %>% names()
+    
+    
+    x <- consumption_mpc_realm %>%
+      mutate(
+      gapfill_method_level = case_when(
+        gapfill_method == "eez_gapfill" & gapfill_level == "subfamily" ~ "EEZ: Subfamily",
+        gapfill_method == "eez_gapfill" & gapfill_level == "genus" ~ "EEZ: Genus",
+        gapfill_method == "eez_gapfill" & gapfill_level == "family" ~ "EEZ: Family",
+        gapfill_method == "eez_gapfill" & gapfill_level == "order" ~ "EEZ: Order",
+        gapfill_method == "eez_gapfill" & gapfill_level == "class" ~ "EEZ: Class",
+        gapfill_method == "eez_gapfill" & gapfill_level == "phylum" ~ "EEZ: Phylum",
+        
+        gapfill_method == "realm_gapfill" & gapfill_level == "subfamily" ~ "Realm: Subfamily",
+        gapfill_method == "realm_gapfill" & gapfill_level == "genus" ~ "Realm: Genus",
+        gapfill_method == "realm_gapfill" & gapfill_level == "family" ~ "Realm: Family",
+        gapfill_method == "realm_gapfill" & gapfill_level == "order" ~ "Realm: Order",
+        gapfill_method == "realm_gapfill" & gapfill_level == "class" ~ "Realm: Class",
+        gapfill_method == "realm_gapfill" & gapfill_level == "phylum" ~ "Realm: Phylum",
+        gapfill_method == "Gapfill not needed" ~ "No gapfill needed",
+        gapfill_method == "Unsuccessful gapfill" ~ "Unsuccessful gapfill"
+      ),
+      gapfill_method_level = factor(
+        gapfill_method_level,
+        levels = c(
+          "EEZ: Genus",
+          "EEZ: Subfamily",
+          "EEZ: Family",
+          "EEZ: Order",
+          "EEZ: Class",
+          "EEZ: Phylum",
+          "Realm: Genus",
+          "Realm: Subfamily",
+          "Realm: Family",
+          "Realm: Order",
+          "Realm: Class",
+          "Realm: Phylum",
+          "No gapfill needed",
+          "Unsuccessful gapfill"
+        )
+      )) %>%
+      group_by(gapfill_method_level, sciname) %>%
+      summarize(cv = mean(ssp126, na.rm = TRUE) / sd(ssp126, na.rm = TRUE)) %>%
+      drop_na()
+    
+    x 
+      mutate()
+      ggplot(aes(aes(x = gapfill_method_level, y = cv))) +
+      geom_col()
+```
+
+# Check coverage of interpolated consumption data
+
+```{r}
+consumption_mpc_realm <- read_parquet("../output/future_catch_joined_consumption/interpolated_future_data_realm_gapfill.parquet")
+
+consumption_mpc_region <- read_parquet("../output/future_catch_joined_consumption/interpolated_future_data_region_gapfill.parquet")
+
+consumption_mpc_realm %>%
+  filter(gapfill_method != "Gapfill not needed") %>%
+  group_by(eez_iso3c, sciname, gapfill_method) %>%
+  summarize(live_weight_t = sum(live_weight_t), .groups = "drop") %>%
+  group_by(eez_iso3c, sciname) %>%
+  slice_max(live_weight_t, n = 3) %>%
+  arrange(desc(live_weight_t))
+
+
+consumption_mpc_realm %>%
+  group_by(gapfill_method) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  arrange(-live_weight_t)
+
+consumption_mpc_region %>%
+  group_by(gapfill_method) %>%
+  summarize(live_weight_t = round(sum(live_weight_t),0)) %>%
+  arrange(-live_weight_t)
+  
+
+```
+

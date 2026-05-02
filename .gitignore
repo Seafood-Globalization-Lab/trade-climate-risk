@@ -53,3 +53,5 @@ archive/
 .RData
 
 code/00_Preprocess_Data.R
+
+images

@@ -22,7 +22,10 @@ library(devtools)
 library(tidytext)
 library(ggsankey)
 library(exploreARTIS)
+library(rfishbase)
 ```
+
+FIXIT: Warning: There were 250 warnings in `mutate()` check out where those 250 warnings are coming from and see whether that is okay or not.
 
 # Overview
 
@@ -69,6 +72,10 @@ preprocess_climate_data <- function(dir) {
       select(taxon_name, eez_name, ssp, mean_mcp_delta_2030) %>%
       pivot_wider(names_from = ssp, values_from = mean_mcp_delta_2030, values_fn = mean)
   })
+  
+  # Save files to .RDS (for quality checks) FIXIT - maybe delete later
+  saveRDS(file_names, "../data/exposure/utils/file_names.rds")
+  saveRDS(species_names, "../data/exposure/utils/species_names.rds")
 
   # Recode EEZ territory strings to ISO3C — territories are assigned to their
   # sovereign nation
@@ -91,12 +98,19 @@ preprocess_climate_data <- function(dir) {
       TRUE ~ countrycode(eez_name, origin = "country.name", destination = "iso3c")
     )) %>%
     rename(eez_iso3c = eez_name, sciname = taxon_name)
+  
+    # group_by(sciname, eez_iso3c) %>% # FIXIT - Should the EEZ aggregation be here?
+    # summarize(ssp126 = mean(ssp126),
+    #        ssp585 = mean(ssp585))
 
-  write_csv(df, "../output/future_climate_joined.csv")
-  message("✅ future_climate_joined.csv written to ../output/")
+  write_csv(df, "../output/future_catch_data_joined/future_catch_joined.csv")
+  message("✅ future_catch_joined.csv written to ../output/")
 
   invisible(df)
 }
+
+# FIXIT: integrate 
+# dplyr::mutate(!!country_col_name := stringr::str_remove(.data[[country_col_name]], "\\(.+\\)$")) 
 ```
 
 ---
@@ -139,93 +153,441 @@ build_taxa_levels <- function(sciname_df) {
 
 # Helper: for each higher taxonomic level, compute mean SSP values per EEZ
 # so that species with missing projections can borrow from relatives
-build_taxa_lookup <- function(df) {
+build_taxa_lookup <- function(df, ecoregion) {
   tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
 
-  unique_climate <- df %>%
-    select(eez_iso3c, sciname_hs_modified, ssp126, ssp585,
-           genus, subfamily, family, order, class, phylum, kingdom, superclass) %>%
-    distinct()
+  # unique_climate <- df %>%
+  #   select(eez_iso3c, sciname, ssp126, ssp585,
+  #          genus, subfamily, family, order, class, phylum, kingdom, superclass, live_weight_t, producer_iso3c, exporter_iso3c, consumer_iso3c) %>%
+  #   distinct()
+  
+  unique_climate <- df
 
-  map_dfr(tax_levels, function(level) {
+  # For each taxa in an EEZ, compute the average ssp126 / 585 value for all species within in the taxa
+  
+  # Alternate: Build averages by region to gapfill if there is no neighbor found within an EEZ
+  eez_gapfills_wgt <- map_dfr(tax_levels, function(level) {
     unique_climate %>%
       filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname_hs_modified, .keep_all = TRUE) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
       group_by(eez_iso3c, !!sym(level)) %>%
       summarise(
-        avg_ssp126 = mean(ssp126, na.rm = TRUE),
-        avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        unwgt_eez_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        unwgt_avg_ssp585 = mean(ssp585, na.rm = TRUE),
         .groups = "drop"
       ) %>%
       rename(taxa_name = !!sym(level)) %>%
       mutate(taxa_level = level)
   })
+  
+  region_gapfills <- map_dfr(tax_levels, function(level) {
+    unique_climate %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      add_region("eez_iso3c", "region") %>%
+      group_by(region, !!sym(level)) %>%
+      summarise(
+        region_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        region_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  realm_gapfills <- map_dfr(tax_levels, function(level) {
+    unique_climate %>%
+      left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      group_by(realm, !!sym(level)) %>%
+      summarise(
+        realm_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        realm_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  return(list(
+    eez_gapfills = eez_gapfills,
+    region_gapfills = region_gapfills,
+    realm_gapfills = realm_gapfills
+  ))
+      
 }
 
 # Helper: walk up the taxonomic ladder and fill NA SSP values from the nearest
 # available ancestor within the same EEZ
-fill_with_higher_taxa <- function(df, lookup_table) {
+fill_with_higher_taxa <- function(df, lookup_table, gap_filling_method, ecoregion) {
+  
   tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
 
+  df <- df %>% mutate(gapfill_level = NA_character_, gapfill_method = NA_character_)
+  
+  # Run through EEZ averaged gapfilling first
   for (level in tax_levels) {
     join_by_map <- setNames("taxa_name", level)
 
     df <- df %>%
       select(-taxa_level) %>%
+      ## Join data to EEZ interpolated data
       left_join(
-        lookup_table %>% filter(taxa_level == level),
+        lookup_table$eez_gapfills %>% filter(taxa_level == level),
         by = c("eez_iso3c", join_by_map)
       ) %>%
+      ## Conduct EEZ gapfills
+      ### Only assign the gapfill method if there was actually a gapfill occurring
+      ### Only assign the taxonomic level for which the gapfill was performed at
+      ### if a gapfill occurred
       mutate(
-        ssp126 = coalesce(ssp126, avg_ssp126),
-        ssp585 = coalesce(ssp585, avg_ssp585)
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(eez_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(eez_avg_ssp126) ~ "eez_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, eez_avg_ssp126),
+        ssp585 = coalesce(ssp585, eez_avg_ssp585),
       ) %>%
-      select(-avg_ssp126, -avg_ssp585)
+      select(-eez_avg_ssp126, -eez_avg_ssp585)
   }
+  
+  # Run through realm/region averaged gapfilling second
+  
+  if (gap_filling_method == "region") {
+    
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+    
+    if (level == "genus") { # Only do on first loop iteration
+      df <- df %>%
+        add_region("eez_iso3c", "region")
+    }
+    
+    df <- df %>%
+      select(-taxa_level) %>%
+    # Join data to Region interpolated data
+      left_join(
+        lookup_table$region_gapfills %>% filter(taxa_level == level),
+        by = c("region", join_by_map)
+      ) %>%
+        mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(region_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(region_avg_ssp126) ~ "region_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, region_avg_ssp126),
+        ssp585 = coalesce(ssp585, region_avg_ssp585),
+      ) %>%
+      select(-region_avg_ssp126, -region_avg_ssp585)  
+  }
+    
+  } else if (gap_filling_method == "realm") {
+    
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+    
+    if (level == "genus") { # Only do on first loop iteration
+      df <- df %>%
+        # FIXIT: Do we want to go more specific tham realm? The order of specificity from most to least
+        # specific classification is realm, province, and realm
+        left_join(ecoregion %>% select(iso3c, realm), by = c("eez_iso3c" = "iso3c"))
+    }
+    
+    df <- df %>%
+      select(-taxa_level) %>%
+    # Join data to Region interpolated data
+      left_join(
+        lookup_table$realm_gapfills %>% filter(taxa_level == level),
+        by = c("realm", join_by_map)
+      ) %>%
+        mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ "realm_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, realm_avg_ssp126),
+        ssp585 = coalesce(ssp585, realm_avg_ssp585),
+      ) %>%
+      select(-realm_avg_ssp126, -realm_avg_ssp585)  
+  }
+    
+  }
+  
+  
+  
+  
+  # Post gapfilling, delineate whether the gapfilling
+  # was not needed or was unable to e performed
+  
+  df <- df %>%
+    mutate(gapfill_method = case_when(
+      !is.na(ssp126) & is.na(gapfill_method) ~ "Gapfill not needed",
+      is.na(ssp126) ~ "Unsuccessful gapfill",
+      TRUE ~ gapfill_method
+    ),
+    gapfill_level = case_when(
+      !is.na(ssp126) & is.na(gapfill_level) ~ "Gapfill not needed",
+      is.na(ssp126) ~ "Unsuccessful gapfill",
+      TRUE ~ gapfill_level
+    )
+    )
 
   df %>% select(-taxa_level)
 }
 
-build_exposure <- function(dir, portfolio = c("foreign", "total")) {
+build_exposure <- function(dir, portfolio = c("foreign", "total"), gap_filling_method) {
   portfolio <- match.arg(portfolio)
-
+  
+  # Load in file names and species names acquired from the sau mcp data
+  file_names <- readRDS("../data/exposure/utils/file_names.rds")
+  species_names <- readRDS("../data/exposure/utils/species_names.rds")
+  
+  # File integrity diagnostics
+  
+  filename_keys <- as.integer(str_extract(basename(file_names), "\\d+"))
+  
+  # Scan all files once, collecting all needed info in a single pass
+  file_scan <- map_dfr(file_names, function(f) {
+    df_i <- fread(f, colClasses = list(character = c("eez_name", "ssp")))
+    filename_key <- as.integer(str_extract(basename(f), "\\d+"))
+    
+    if (nrow(df_i) == 0) {
+      return(tibble(filename_key = filename_key, actual_key = NA_integer_, n_rows = 0L, found_in_file = basename(f)))
+    }
+    
+    tibble(filename_key = filename_key, actual_key = unique(df_i$taxon_key), n_rows = nrow(df_i), found_in_file = basename(f))
+  })
+  
+  # No file at all
+  no_file <- species_names %>% 
+    filter(!taxon_key %in% filename_keys) %>%
+    as_tibble() %>%
+    mutate(issue = "no file", found_in_file = NA_character_)
+  
+  # Empty files
+  empty_files <- file_scan %>%
+    filter(n_rows == 0) %>%
+    left_join(as_tibble(species_names), by = c("filename_key" = "taxon_key")) %>%
+    mutate(issue = "empty file") %>%
+    select(taxon_key = filename_key, taxon_name, issue, found_in_file)
+  
+  # Mismatched keys — also check if no_file species are hiding in these files
+  mismatched <- file_scan %>%
+    filter(n_rows > 0, filename_key != actual_key) %>%
+    left_join(as_tibble(species_names), by = c("actual_key" = "taxon_key")) %>%
+    mutate(issue = "mismatched key") %>%
+    select(taxon_key = actual_key, taxon_name, issue, found_in_file)
+  
+  # Check if any no_file species are hiding inside mismatched files
+  no_file_found <- no_file %>%
+    filter(taxon_key %in% mismatched$taxon_key) %>%
+    left_join(mismatched %>% select(taxon_key, found_in_file), by = "taxon_key") %>%
+    mutate(issue = "no file — found in mismatched file")
+  
+  no_file_not_found <- no_file %>%
+    filter(!taxon_key %in% mismatched$taxon_key)
+  
+  # Get the files which have no data themselves and contain files from another species id
+  mismatched_origin_file <- gsub(c("percentage_change_"), "", mismatched$found_in_file) 
+  mismatched_origin_file <- as.numeric (gsub(".csv", "", mismatched_origin_file))
+  
+  mismatched_origin_file <- species_names %>%
+    filter(
+      taxon_key %in% 
+             species_names$taxon_key[species_names$taxon_key %in% mismatched_origin_file]
+    )
+  
+  # Correct files
+  correct <- species_names %>%
+    as_tibble() %>%
+    filter(
+      taxon_key %in% filename_keys,
+      !taxon_key %in% empty_files$taxon_key,
+      !taxon_key %in% mismatched$taxon_key,
+      !taxon_key %in% mismatched_origin_file$taxon_key
+    ) %>%
+    mutate(issue = "correct", found_in_file = NA_character_)
+  
+  # Summary
+  cat("Exposure data quality__________________________________________________________________", "\n")
+  cat("No file (truly missing):                                                           ", nrow(no_file_not_found), "\n")
+  cat("File unavailable, but data found in other file:                                    ", nrow(mismatched), "\n")
+  cat("File available, but contains another species data (original data is nowhere else): ", nrow(mismatched_origin_file), "\n")
+  cat("Empty file:                                                                        ", nrow(empty_files), "\n")
+  cat("Incorrect:                                                                         ", nrow(no_file_not_found) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file), "\n")
+  cat("Correct:                                                                           ", nrow(correct), "\n")
+  cat("Total accounted for:                                                               ", nrow(no_file_not_found) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file) + nrow(correct), "\n")
+  cat("Total in species_names:                                                            ", nrow(species_names), "\n")
+  
+  # Read data
+  ## Read in conumption data
   consumption <- read_parquet(paste0(dir, "example_consumption_eez_2024_12_06.parquet")) %>%
-    mutate(sciname_hs_modified = coalesce(sciname_hs_modified, sciname))
-
+    filter(year == 2019, habitat == "marine", method == "capture")
+  
+  ## Read in ARTIS sciname data
   sciname_taxa <- read_csv(paste0(dir, "sciname.csv"), show_col_types = FALSE) %>%
     build_taxa_levels()
+  
+  ## Read in Juliano's mcp data
+  climate_by_spp_eez <- read_csv("../output/future_catch_data_joined/future_catch_joined.csv", show_col_types = FALSE) %>%
+    drop_na()
+  
+  ## Read in ecoregion data
+  ### Load in ecoregion data (i.e., average mcp values across ecoregion data)
+  
+  ### Read in ecoregions for largest soverign shape
+  ecoregion_unique <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoregion_to_EEZ/ecoregion_clean.csv") %>%
+    select(-FREQUENCY) %>%
+    rename(iso3c = "ISO_SOV1",
+           shape_area = "MAX_Shape_Area")
+  
+  # Read in ecoregion data (all shapes associated with soverign)
+ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoregion_to_EEZ/ecoregion.csv") %>%
+  rename("iso3c" = "ISO_SOV1",
+         ecoregion = "ECOREGION",
+         province = "PROVINCE",
+         realm = "REALM",
+         shape_area = "Shape_Area")
+  
+  ### Join largest shape for the respective soverign country to their ecoregion names
+  ecoregion <- left_join(ecoregion_unique, ecoregion_full, by = c("iso3c", "shape_area")) %>%
+    filter(realm != "")
+  
+  ### Assign countries not associated with a marine ecoregion to "landlocked" code
 
-  climate_by_spp_eez <- read_csv("../output/future_climate_joined.csv", show_col_types = FALSE) %>%
+  landlocked_countries <- consumption %>%
+    distinct(consumer_iso3c) %>%
     drop_na() %>%
+    add_region(col = "consumer_iso3c", region.col.name = "region") %>%
+    filter(!consumer_iso3c %in% ecoregion$iso3c) %>%
+    mutate(ecoregion = paste0("Landlocked, ", region),
+           province = paste0("Landlocked, ", region),
+           realm = paste0("Landlocked, ", region)) %>%
+    select(-region) %>%
+    rename(iso3c = consumer_iso3c)
+  
+  # Clean ecoregion data
+  ecoregion <- bind_rows(ecoregion, landlocked_countries) %>%
+    arrange(iso3c) %>%
+    select(-shape_area)
+  
+  
+  #   Correct Juliano's unaligned species names to Fishbase / SeaLifeBase naming
+  ##  Problem: mcp data has (1) updated taxa names; and (2) out of date taxa names
+  ##  We can't just correct all Juliano's data through Fishbase / SeaLifeBase
+  ##  naming as they also have out of date items that are unaligned with ARTIS.
+  ### Step 1: See which of Juliano's data when joined to 2019 ARTIS consumption data,
+  ### is not joined
+
+  #### Get list of unique ARTIS scientific names
+  consumption_species_list <- consumption %>% # Filter to only species names
+  distinct(sciname)
+
+  #### Which of Juliano's species are not matching to ARTIS?
+  unaligned_names <- correct$taxon_name[!str_to_lower(correct$taxon_name) %in%
+                                          consumption_species_list$sciname]
+  
+  
+  
+  #### Correct Juliano's species names that aren't aligned with Fishbase / SeaLifeBase
+  
+  # FIXIT: Download these data so that we don't have to rely on a function that could break with future updates
+  fb_corrections <- validate_names(species_list = unaligned_names, serve = "fishbase",
+                                   version = "24.07") %>% suppressMessages()
+  slb_corrections <- validate_names(species_list = unaligned_names, serve = "sealifebase",
+                                    version = "24.07") %>% suppressMessages()
+  
+  #### Get list of corrected names
+  corrections <- na.omit(fb_corrections) %>% append(na.omit(slb_corrections)) %>% str_to_lower()
+  
+  #### Create a separate dataframe of the catch projections that contain corrected names.
+  #### We will use the Juliano's original naming as well as 
+  #### the corrected one for two joins to ARTIS
+  #### the first join will use Juliano's presently correct data, the second join
+  #### will join Juliano's previously incorrect names (now corrected)
+  
+  ##### Create lookup table
+  ##### (str_to_lower had to be done here becaue fb/slb lookup tables are uppercase)
+  correction_lookups <- setNames(corrections, unaligned_names %>% str_to_lower())
+  
+  ##### Create data separate data frame
+  climate_by_spp_eez_corrected <- climate_by_spp_eez %>%
+  mutate(sciname = ifelse(
+    sciname %in% names(correction_lookups),
+    correction_lookups[sciname],
+    NA
+  )) %>%
+    drop_na(sciname)
+
+  ## Problem: mcp data has (1) updated taxa names; and (2) out of date taxa names
+  ### Combine Juliano's pre and post-corrected naming data.
+  climate_by_spp_eez_combined <- bind_rows(climate_by_spp_eez, climate_by_spp_eez_corrected) %>%
     group_by(eez_iso3c, sciname) %>%
-    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop") ### For each species, average mcp projections across territories with an EEZ
+  
+  ### FIXIT: included for testing purposes. Remove later.
+    consumption_mpc <- consumption %>%
+    left_join(sciname_taxa, by = c("sciname" = "sciname")) %>%
+      left_join(climate_by_spp_eez, by = c("eez_iso3c", "sciname"))
+  
+  ### Join consumption data to catch projections
+    consumption_mpc <- consumption %>%
+    left_join(sciname_taxa, by = c("sciname" = "sciname")) %>%
+    left_join(climate_by_spp_eez_combined, by = c("eez_iso3c", "sciname"))
+  
+  #### Use gap filling if user input says to, otherwise avoid
+  if (gap_filling_method == "none") {
+    
+    x <- consumption_mpc
+    
+  } else {
+    
+    x <- fill_with_higher_taxa(consumption_mpc, 
+                               lookup_table = build_taxa_lookup(consumption_mpc, ecoregion),
+                               gap_filling_method = gap_filling_method,
+                               ecoregion = ecoregion)
+    
+  }
 
-  consumption_2019 <- consumption %>%
-    filter(year == 2019) %>%
-    left_join(sciname_taxa, by = c("sciname_hs_modified" = "sciname")) %>%
-    left_join(climate_by_spp_eez, by = c("eez_iso3c", "sciname_hs_modified" = "sciname"))
-
-  interpolated <- fill_with_higher_taxa(consumption_2019, build_taxa_lookup(consumption_2019)) %>%
+  ### Add taxa levels to data
+  interpolated <- x %>%
     mutate(
       taxa_level = case_when(
-        sciname_hs_modified == kingdom    ~ "kingdom",
-        sciname_hs_modified == phylum     ~ "phylum",
-        sciname_hs_modified == superclass ~ "superclass",
-        sciname_hs_modified == class      ~ "class",
-        sciname_hs_modified == order      ~ "order",
-        sciname_hs_modified == family     ~ "family",
-        sciname_hs_modified == subfamily  ~ "subfamily",
-        sciname_hs_modified == genus      ~ "genus",
-        str_detect(sciname_hs_modified, " ") ~ "species"
+        sciname == kingdom    ~ "kingdom",
+        sciname == phylum     ~ "phylum",
+        sciname == superclass ~ "superclass",
+        sciname == class      ~ "class",
+        sciname == order      ~ "order",
+        sciname == family     ~ "family",
+        sciname == subfamily  ~ "subfamily",
+        sciname == genus      ~ "genus",
+        str_detect(sciname, " ") ~ "species"
       ),
       species = if_else(
-        str_count(sciname_hs_modified, " ") == 1,
-        word(sciname_hs_modified, 2),
+        str_count(sciname, " ") == 1,
+        word(sciname, 2),
         NA_character_
       )
     )
+  
+if (gap_filling_method != "none") {
+  write_parquet(interpolated, paste0("../output/future_catch_joined_consumption/interpolated_future_data_",gap_filling_method,"_gapfill.parquet"))
+}
 
-  write_parquet(interpolated, "../output/interpolated_future_data.parquet")
+  
 
   future_long <- interpolated %>%
     pivot_longer(c(ssp126, ssp585), names_to = "scenario", values_to = "future_change_catch")
@@ -254,13 +616,15 @@ build_exposure <- function(dir, portfolio = c("foreign", "total")) {
 
   stock_pre %>%
     mutate(change_in_stock = live_weight_t * future_change_catch) %>%
-    group_by(consumer_iso3c, scenario) %>%
+    group_by(consumer_iso3c, scenario) %>% # FIXIT: changed from consumer_iso3c to producer_iso3c - switch back
     summarise(
       change_in_stock = sum(change_in_stock),
       live_weight_t   = sum(live_weight_t),
       .groups = "drop"
     ) %>%
-    mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t))
+    mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t)) # FIXIT: Use a pipe here if I am testing the expsoure
+    # On producer_iso3c
+    # rename(consumer_iso3c = producer_iso3c) # FIXIT: Remove this as well when done testing
 }
 ```
 
@@ -286,16 +650,22 @@ build_sensitivity <- function(dir, portfolio = c("foreign", "total")) {
 
   base <- supply_importance %>%
     filter(year == 2019, habitat == "marine", method == "capture", food_group == "aquatic")
-
-  if (portfolio == "foreign") {
-    base %>%
-      group_by(iso3c) %>%
-      summarise(aa_reliance_pct = sum(prop_animal_protein), .groups = "drop")
-  } else {
-    base %>%
+  
+  # Calculate reliance on foreign imported marine capture foods
+  foreign <- base %>%
       filter(consumption_source == "foreign") %>%
-      select(iso3c, aa_reliance_pct = prop_animal_protein)
-  }
+      select(iso3c, foreign_reliance_pct = prop_animal_protein)
+  
+  # Calculate reiance on marine capture
+  mc <- base %>%
+      group_by(iso3c) %>%
+      summarise(mc_reliance_pct = sum(prop_animal_protein), .groups = "drop")
+  
+  # combine foreign / marine capture reliance data
+  foreign_mc <- left_join(foreign, mc, by = "iso3c")
+  
+  return(foreign_mc)
+
 }
 ```
 
@@ -420,11 +790,12 @@ Calls `build_exposure()`, `build_sensitivity()`, and
 writes the output parquet.
 
 ```{r build-e-s-ac-data}
-build_e_s_ac_data <- function(portfolio = c("foreign", "total"), dir) {
+build_e_s_ac_data <- function(portfolio = c("foreign", "total"), dir, gap_filling_method = c("none", "region", "realm")) {
+  gap_filling_method <- match.arg(gap_filling_method)
   portfolio <- match.arg(portfolio)
   cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
 
-  exposure     <- build_exposure(dir, portfolio)
+  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method)
   sensitivity  <- build_sensitivity(dir, portfolio)
 
   consuming_countries <- exposure %>% distinct(consumer_iso3c) %>% pull()
@@ -434,7 +805,7 @@ build_e_s_ac_data <- function(portfolio = c("foreign", "total"), dir) {
     right_join(sensitivity,  by = c("consumer_iso3c" = "iso3c")) %>%
     left_join(exposure,      by = "consumer_iso3c")
 
-  out_path <- sprintf("../output/e_s_ac_data_%s.parquet", portfolio)
+  out_path <- paste0("../output/e_s_ac/e_s_ac_", portfolio, "_",gap_filling_method,"_gapfill.parquet") # FIXIT: added producer, need to remove "producer" after testing
   write_parquet(e_s_ac, out_path)
   cat(sprintf("✅ Saved %s\n", out_path))
 
