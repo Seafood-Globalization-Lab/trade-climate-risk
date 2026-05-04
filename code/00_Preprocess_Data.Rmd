@@ -62,14 +62,16 @@ preprocess_climate_data <- function(dir) {
 
   species_names <- fread(paste0(dir, "exposure/dbem_spp_list.csv"))
 
+
   df <- map_dfr(file_names, function(f) {
     df_i <- fread(f)
     if (nrow(df_i) == 0) return(NULL)
 
     df_i %>%
       left_join(species_names, by = "taxon_key") %>%
-      mutate(taxon_name = str_to_lower(taxon_name)) %>%
-      select(taxon_name, eez_name, ssp, mean_mcp_delta_2030) %>%
+      mutate(taxon_name = str_to_lower(taxon_name),
+             file_found_in = as.numeric(sub(".*_(\\d+)\\.csv$", "\\1", f))) %>% # variable that stores which file name X species was found in (will be used to ensure that species are found in their correct file names and not multiple files)
+      select(taxon_name, eez_name, ssp, mean_mcp_delta_2030, file_found_in) %>%
       pivot_wider(names_from = ssp, values_from = mean_mcp_delta_2030, values_fn = mean)
   })
   
@@ -98,10 +100,6 @@ preprocess_climate_data <- function(dir) {
       TRUE ~ countrycode(eez_name, origin = "country.name", destination = "iso3c")
     )) %>%
     rename(eez_iso3c = eez_name, sciname = taxon_name)
-  
-    # group_by(sciname, eez_iso3c) %>% # FIXIT - Should the EEZ aggregation be here?
-    # summarize(ssp126 = mean(ssp126),
-    #        ssp585 = mean(ssp585))
 
   write_csv(df, "../output/future_catch_data_joined/future_catch_joined.csv")
   message("✅ future_catch_joined.csv written to ../output/")
@@ -155,33 +153,60 @@ build_taxa_levels <- function(sciname_df) {
 # so that species with missing projections can borrow from relatives
 build_taxa_lookup <- function(df, ecoregion) {
   tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
-
-  # unique_climate <- df %>%
-  #   select(eez_iso3c, sciname, ssp126, ssp585,
-  #          genus, subfamily, family, order, class, phylum, kingdom, superclass, live_weight_t, producer_iso3c, exporter_iso3c, consumer_iso3c) %>%
-  #   distinct()
   
-  unique_climate <- df
+  # Compute weighted average
+  wmean <- function(x, w) sum(w * x, na.rm = TRUE) / sum(w, na.rm = TRUE)
+  # Compute weighted coefficient of variation
+  wcv <- function(x, w) {
+    m <- wmean(x, w)
+    s <- sqrt(sum(w * (x - m)^2, na.rm = TRUE) / sum(w, na.rm = TRUE))
+    s / m
+  }
 
   # For each taxa in an EEZ, compute the average ssp126 / 585 value for all species within in the taxa
   
-  # Alternate: Build averages by region to gapfill if there is no neighbor found within an EEZ
-  eez_gapfills_wgt <- map_dfr(tax_levels, function(level) {
-    unique_climate %>%
+  ## EEZ level gap filling
+  ### Unweighted averaging
+  eez_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
       filter(!is.na(ssp126) | !is.na(ssp585)) %>%
       distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
       group_by(eez_iso3c, !!sym(level)) %>%
       summarise(
-        unwgt_eez_avg_ssp126 = mean(ssp126, na.rm = TRUE),
-        unwgt_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        eez_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        eez_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        cv_ssp126 = sd(ssp126, na.rm = TRUE) / eez_avg_ssp126,
+        cv_ssp585 = sd(ssp585, na.rm = TRUE) / eez_avg_ssp585,
         .groups = "drop"
       ) %>%
       rename(taxa_name = !!sym(level)) %>%
       mutate(taxa_level = level)
   })
   
-  region_gapfills <- map_dfr(tax_levels, function(level) {
-    unique_climate %>%
+  ### Weighted averaging
+  eez_gapfills_wgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      group_by(eez_iso3c, !!sym(level)) %>%
+      summarise(
+        eez_avg_ssp126 = wmean(ssp126, live_weight_t),
+        eez_avg_ssp585 = wmean(ssp585, live_weight_t),
+        cv_ssp126 = wcv(ssp126, live_weight_t),
+        cv_ssp585 = wcv(ssp585, live_weight_t),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  ## Region level gap filling
+  ### Unweighted averaging
+  region_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
       filter(!is.na(ssp126) | !is.na(ssp585)) %>%
       distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
       add_region("eez_iso3c", "region") %>%
@@ -189,14 +214,38 @@ build_taxa_lookup <- function(df, ecoregion) {
       summarise(
         region_avg_ssp126 = mean(ssp126, na.rm = TRUE),
         region_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        cv_ssp126 = sd(ssp126, na.rm = TRUE) / region_avg_ssp126,
+        cv_ssp585 = sd(ssp585, na.rm = TRUE) / region_avg_ssp585,
         .groups = "drop"
       ) %>%
       rename(taxa_name = !!sym(level)) %>%
       mutate(taxa_level = level)
   })
   
-  realm_gapfills <- map_dfr(tax_levels, function(level) {
-    unique_climate %>%
+  ### Weighted averaging
+  region_gapfills_wgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      add_region("eez_iso3c", "region") %>%
+      group_by(region, !!sym(level)) %>%
+      summarise(
+        region_avg_ssp126 = wmean(ssp126, live_weight_t),
+        region_avg_ssp585 = wmean(ssp585, live_weight_t),
+        cv_ssp126 = wcv(ssp126, live_weight_t),
+        cv_ssp585 = wcv(ssp585, live_weight_t),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  ## Realm level gap filling
+  ### Unweighted averaging
+  realm_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
       left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
       filter(!is.na(ssp126) | !is.na(ssp585)) %>%
       distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
@@ -204,6 +253,64 @@ build_taxa_lookup <- function(df, ecoregion) {
       summarise(
         realm_avg_ssp126 = mean(ssp126, na.rm = TRUE),
         realm_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        cv_ssp126 = sd(ssp126) / realm_avg_ssp126,
+        cv_ssp585 = sd(ssp585) / realm_avg_ssp585,
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  # Weighted averaging
+  realm_gapfills_wgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
+      left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      group_by(realm, !!sym(level)) %>%
+      summarise(
+        realm_avg_ssp126 = wmean(ssp126, live_weight_t),
+        realm_avg_ssp585 = wmean(ssp585, live_weight_t),
+        cv_ssp126 = wcv(ssp126, live_weight_t),
+        cv_ssp585 = wcv(ssp585, live_weight_t),
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  ### Global level gapfilling
+  # Unweighted averaging
+  global_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(sciname, .keep_all = TRUE) %>%
+      group_by(!!sym(level)) %>%
+      summarise(
+        global_avg_ssp126 = mean(ssp126, na.rm = TRUE),
+        global_avg_ssp585 = mean(ssp585, na.rm = TRUE),
+        cv_ssp126 = sd(ssp126) / global_avg_ssp126,
+        cv_ssp585 = sd(ssp585) / global_avg_ssp585,
+        .groups = "drop"
+      ) %>%
+      rename(taxa_name = !!sym(level)) %>%
+      mutate(taxa_level = level)
+  })
+  
+  # Weighted averaging
+  global_gapfills_wgt <- map_dfr(tax_levels, function(level) {
+    df %>%
+      distinct() %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      distinct(sciname, .keep_all = TRUE) %>%
+      group_by(!!sym(level)) %>%
+      summarise(
+        global_avg_ssp126 = wmean(ssp126, live_weight_t),
+        global_avg_ssp585 = wmean(ssp585, live_weight_t),
+        cv_ssp126 = wcv(ssp126, live_weight_t),
+        cv_ssp585 = wcv(ssp585, live_weight_t),
         .groups = "drop"
       ) %>%
       rename(taxa_name = !!sym(level)) %>%
@@ -211,30 +318,58 @@ build_taxa_lookup <- function(df, ecoregion) {
   })
   
   return(list(
-    eez_gapfills = eez_gapfills,
-    region_gapfills = region_gapfills,
-    realm_gapfills = realm_gapfills
+    eez_gapfills_unwgt = eez_gapfills_unwgt,
+    eez_gapfills_wgt = eez_gapfills_wgt,
+    region_gapfills_unwgt = region_gapfills_unwgt,
+    region_gapfills_wgt = region_gapfills_wgt,
+    realm_gapfills_unwgt = realm_gapfills_unwgt,
+    realm_gapfills_wgt = realm_gapfills_wgt,
+    global_gapfills_unwgt = global_gapfills_unwgt,
+    global_gapfills_wgt = global_gapfills_wgt
   ))
       
 }
 
 # Helper: walk up the taxonomic ladder and fill NA SSP values from the nearest
 # available ancestor within the same EEZ
-fill_with_higher_taxa <- function(df, lookup_table, gap_filling_method, ecoregion) {
+fill_with_higher_taxa <- function(df,
+                                  lookup_table,
+                                  gap_filling_method,
+                                  averaging,
+                                  ecoregion) {
   
+  # Set taxonomic levels to iterate through
   tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
 
+  # Create empty dataframe of interpolations
   df <- df %>% mutate(gapfill_level = NA_character_, gapfill_method = NA_character_)
   
+  # Create variable that will dynamically join to the lookup table
+  # so that only the target data is used
+  if (averaging == "weighted" & gap_filling_method != "thorough") {
+    eez_str <- paste0("eez_gapfills_wgt")
+    second_lookup <- paste0(gap_filling_method,"_gapfills_wgt")
+    
+  } else {
+    
+    eez_str <- paste0("eez_gapfills_unwgt")
+    second_lookup <- paste0(gap_filling_method,"_gapfills_unwgt")
+    
+  }
+
   # Run through EEZ averaged gapfilling first
   for (level in tax_levels) {
+    
+    # Create a variable that will dynamically select column names to join
+    # consumption data to catch projection gap filled values
+    # based on taxa level
     join_by_map <- setNames("taxa_name", level)
 
     df <- df %>%
       select(-taxa_level) %>%
       ## Join data to EEZ interpolated data
       left_join(
-        lookup_table$eez_gapfills %>% filter(taxa_level == level),
+        lookup_table[[eez_str]] %>% filter(taxa_level == level),
         by = c("eez_iso3c", join_by_map)
       ) %>%
       ## Conduct EEZ gapfills
@@ -272,7 +407,7 @@ fill_with_higher_taxa <- function(df, lookup_table, gap_filling_method, ecoregio
       select(-taxa_level) %>%
     # Join data to Region interpolated data
       left_join(
-        lookup_table$region_gapfills %>% filter(taxa_level == level),
+        lookup_table[[second_lookup]] %>% filter(taxa_level == level),
         by = c("region", join_by_map)
       ) %>%
         mutate(
@@ -306,7 +441,7 @@ fill_with_higher_taxa <- function(df, lookup_table, gap_filling_method, ecoregio
       select(-taxa_level) %>%
     # Join data to Region interpolated data
       left_join(
-        lookup_table$realm_gapfills %>% filter(taxa_level == level),
+        lookup_table[[second_lookup]] %>% filter(taxa_level == level),
         by = c("realm", join_by_map)
       ) %>%
         mutate(
@@ -322,40 +457,149 @@ fill_with_higher_taxa <- function(df, lookup_table, gap_filling_method, ecoregio
         ssp585 = coalesce(ssp585, realm_avg_ssp585),
       ) %>%
       select(-realm_avg_ssp126, -realm_avg_ssp585)  
-  }
+    }
+    
+  } else if (gap_filling_method == "thorough") {
+    
+    if (averaging == "weighted") {
+      
+    second_lookup <- "realm_gapfills_wgt"
+    third_lookup <-  "region_gapfills_wgt"
+    fourth_lookup <- "global_gapfills_wgt"
+    
+  } else {
+    
+    second_lookup <- "realm_gapfills_unwgt"
+    third_lookup <-  "region_gapfills_unwgt"
+    fourth_lookup <- "global_gapfills_unwgt"
     
   }
-  
-  
-  
+    
+    # Second gapfill level: Realm-level averaging
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+    
+    if (level == "genus") { # Only do on first loop iteration
+      df <- df %>%
+        # FIXIT: Do we want to go more specific tham realm? The order of specificity from most to least
+        # specific classification is realm, province, and realm
+        left_join(ecoregion %>% select(iso3c, realm), by = c("eez_iso3c" = "iso3c"))
+    }
+    
+    df <- df %>%
+      select(-taxa_level) %>%
+    # Join data to Region interpolated data
+      left_join(
+        lookup_table[[second_lookup]] %>% filter(taxa_level == level),
+        by = c("realm", join_by_map)
+      ) %>%
+        mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ "realm_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, realm_avg_ssp126),
+        ssp585 = coalesce(ssp585, realm_avg_ssp585),
+      ) %>%
+      select(-realm_avg_ssp126, -realm_avg_ssp585)  
+    }
+    
+    # Third gapfill level: Region-level averaging
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+    
+    if (level == "genus") { # Only do on first loop iteration
+      df <- df %>%
+        add_region("eez_iso3c", "region")
+    }
+    
+    df <- df %>%
+      select(-taxa_level) %>%
+    # Join data to Region interpolated data
+      left_join(
+        lookup_table[[third_lookup]] %>% filter(taxa_level == level),
+        by = c("region", join_by_map)
+      ) %>%
+        mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(region_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(region_avg_ssp126) ~ "region_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, region_avg_ssp126),
+        ssp585 = coalesce(ssp585, region_avg_ssp585),
+      ) %>%
+      select(-region_avg_ssp126, -region_avg_ssp585)  
+    }
+    
+    # Fourth gapfill level: Global-level averaging
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+    
+    df <- df %>%
+      select(-taxa_level) %>%
+    # Join data to Region interpolated data
+      left_join(
+        lookup_table[[fourth_lookup]] %>% filter(taxa_level == level),
+        by = join_by_map
+      ) %>%
+        mutate(
+        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+          is.na(ssp126) & !is.na(global_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+          TRUE                                              ~ gapfill_level
+        ),
+        gapfill_method = case_when(
+          is.na(ssp126) & !is.na(global_avg_ssp126) ~ "global_gapfill",
+          TRUE                                              ~ gapfill_method
+        ),
+        ssp126 = coalesce(ssp126, global_avg_ssp126),
+        ssp585 = coalesce(ssp585, global_avg_ssp585),
+      ) %>%
+      select(-global_avg_ssp126, -global_avg_ssp585)  
+    }
+      
+    }
   
   # Post gapfilling, delineate whether the gapfilling
-  # was not needed or was unable to e performed
+  # was not needed or was unable to be performed.
+  # Gapfill levels / methods are otherwise left unchanged.
   
   df <- df %>%
     mutate(gapfill_method = case_when(
       !is.na(ssp126) & is.na(gapfill_method) ~ "Gapfill not needed",
       is.na(ssp126) ~ "Unsuccessful gapfill",
-      TRUE ~ gapfill_method
+      TRUE ~ gapfill_method 
     ),
     gapfill_level = case_when(
       !is.na(ssp126) & is.na(gapfill_level) ~ "Gapfill not needed",
       is.na(ssp126) ~ "Unsuccessful gapfill",
-      TRUE ~ gapfill_level
-    )
-    )
-
-  df %>% select(-taxa_level)
+      TRUE ~ gapfill_level 
+    ),
+    averaging = case_when(!(gapfill_method == "Gapfill not needed" |
+                          gapfill_method == "Unsuccessful gapfill") ~ averaging,
+                          TRUE ~ NA_character_) # define whether weighted or unweighted averaging was used.
+    ) %>% 
+    select(-taxa_level) # not needed in final output
+  
+  return(df)
 }
 
-build_exposure <- function(dir, portfolio = c("foreign", "total"), gap_filling_method) {
-  portfolio <- match.arg(portfolio)
-  
+build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption) {
   # Load in file names and species names acquired from the sau mcp data
   file_names <- readRDS("../data/exposure/utils/file_names.rds")
   species_names <- readRDS("../data/exposure/utils/species_names.rds")
   
-  # File integrity diagnostics
+  ## Read in Juliano's mcp data
+  climate_by_spp_eez <- read_csv("../output/future_catch_data_joined/future_catch_joined.csv", show_col_types = FALSE)
+  
+  # File integrity diagnostics of Juliano's climate data
   
   filename_keys <- as.integer(str_extract(basename(file_names), "\\d+"))
   
@@ -370,6 +614,12 @@ build_exposure <- function(dir, portfolio = c("foreign", "total"), gap_filling_m
     
     tibble(filename_key = filename_key, actual_key = unique(df_i$taxon_key), n_rows = nrow(df_i), found_in_file = basename(f))
   })
+  
+  # File has data, but no accompanying species key
+  data_but_no_key <- climate_by_spp_eez %>%
+    filter(is.na(sciname)) %>%
+    group_by(sciname) %>%
+    distinct(file_found_in)
   
   # No file at all
   no_file <- species_names %>% 
@@ -423,27 +673,28 @@ build_exposure <- function(dir, portfolio = c("foreign", "total"), gap_filling_m
   
   # Summary
   cat("Exposure data quality__________________________________________________________________", "\n")
+  cat("File has data, but no accompanying species key                                     ", nrow(data_but_no_key), "\n")
   cat("No file (truly missing):                                                           ", nrow(no_file_not_found), "\n")
   cat("File unavailable, but data found in other file:                                    ", nrow(mismatched), "\n")
   cat("File available, but contains another species data (original data is nowhere else): ", nrow(mismatched_origin_file), "\n")
   cat("Empty file:                                                                        ", nrow(empty_files), "\n")
-  cat("Incorrect:                                                                         ", nrow(no_file_not_found) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file), "\n")
-  cat("Correct:                                                                           ", nrow(correct), "\n")
+  cat("Incorrect:                                                                         ", nrow(no_file_not_found) + nrow(data_but_no_key) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file), "\n")
+  cat("Correct:                                                                           ", nrow(correct) - nrow(data_but_no_key), "\n")
   cat("Total accounted for:                                                               ", nrow(no_file_not_found) + nrow(no_file_found) + nrow(empty_files) + nrow(mismatched) + nrow(mismatched_origin_file) + nrow(correct), "\n")
   cat("Total in species_names:                                                            ", nrow(species_names), "\n")
   
+  ## Remove file_found_in variable (only needed for data coverage diagnostics)
+  ## Also drop NAs so that no na EEZs are joined to potential NAs in consumption
+  ## data with EEZs
+  climate_by_spp_eez <- climate_by_spp_eez %>%
+    select(-file_found_in) %>%
+    drop_na()
+  
   # Read data
-  ## Read in conumption data
-  consumption <- read_parquet(paste0(dir, "example_consumption_eez_2024_12_06.parquet")) %>%
-    filter(year == 2019, habitat == "marine", method == "capture")
   
   ## Read in ARTIS sciname data
   sciname_taxa <- read_csv(paste0(dir, "sciname.csv"), show_col_types = FALSE) %>%
     build_taxa_levels()
-  
-  ## Read in Juliano's mcp data
-  climate_by_spp_eez <- read_csv("../output/future_catch_data_joined/future_catch_joined.csv", show_col_types = FALSE) %>%
-    drop_na()
   
   ## Read in ecoregion data
   ### Load in ecoregion data (i.e., average mcp values across ecoregion data)
@@ -500,18 +751,37 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
   unaligned_names <- correct$taxon_name[!str_to_lower(correct$taxon_name) %in%
                                           consumption_species_list$sciname]
   
+  # Obtain fishbase / sealifebase corrections tables 
+  if (!file.exists("../data/exposure/fb_slb_taxa_corrections/fishbase_corrections.rds")) {
+    for (server in c("fishbase", "sealifebase")) {
+    # Acquire full fishbase taxonomy
+    taxa <- load_taxa(server = server, version = "25.04")
+    
+    # Get synonyms table
+    syn <- synonyms(server = server, version = "25.04") %>%
+      filter(Status == "accepted name" |
+             Status == "synonym")
+    
+    # Join synonyms to corrected taxa names
+    naming_corrections <- left_join(
+      syn %>% filter(!(SpecCode == 0 | SpecCode == 1)) %>% select(synonym, SpecCode),
+      taxa %>% select(SpecCode, Species)
+    )
+    
+    # Save to RDS
+    saveRDS(naming_corrections, paste0("../data/exposure/fb_slb_taxa_corrections/",server,"_corrections.rds"))
+    
+    }
+  }
   
+  # Load in Fishbase / Sealifebase taxa corrections
+  fb_corrections <- readRDS("../data/exposure/fb_slb_taxa_corrections/fishbase_corrections.rds")
+  slb_corrections <- readRDS("../data/exposure/fb_slb_taxa_corrections/sealifebase_corrections.rds")
   
-  #### Correct Juliano's species names that aren't aligned with Fishbase / SeaLifeBase
+  fb_slb_corrections <- bind_rows(fb_corrections, slb_corrections) # Join fb/slb
   
-  # FIXIT: Download these data so that we don't have to rely on a function that could break with future updates
-  fb_corrections <- validate_names(species_list = unaligned_names, serve = "fishbase",
-                                   version = "24.07") %>% suppressMessages()
-  slb_corrections <- validate_names(species_list = unaligned_names, serve = "sealifebase",
-                                    version = "24.07") %>% suppressMessages()
-  
-  #### Get list of corrected names
-  corrections <- na.omit(fb_corrections) %>% append(na.omit(slb_corrections)) %>% str_to_lower()
+  # Join unaligned names to corrections
+  corrections <- sapply(unaligned_names, function (x) unique(fb_slb_corrections$Species[x == fb_slb_corrections$synonym])) %>% unname()
   
   #### Create a separate dataframe of the catch projections that contain corrected names.
   #### We will use the Juliano's original naming as well as 
@@ -536,12 +806,9 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
   ### Combine Juliano's pre and post-corrected naming data.
   climate_by_spp_eez_combined <- bind_rows(climate_by_spp_eez, climate_by_spp_eez_corrected) %>%
     group_by(eez_iso3c, sciname) %>%
-    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop") ### For each species, average mcp projections across territories with an EEZ
+    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop")
   
-  ### FIXIT: included for testing purposes. Remove later.
-    consumption_mpc <- consumption %>%
-    left_join(sciname_taxa, by = c("sciname" = "sciname")) %>%
-      left_join(climate_by_spp_eez, by = c("eez_iso3c", "sciname"))
+  ### For each species, average mcp projections across territories with an EEZ
   
   ### Join consumption data to catch projections
     consumption_mpc <- consumption %>%
@@ -555,10 +822,13 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
     
   } else {
     
-    x <- fill_with_higher_taxa(consumption_mpc, 
-                               lookup_table = build_taxa_lookup(consumption_mpc, ecoregion),
-                               gap_filling_method = gap_filling_method,
-                               ecoregion = ecoregion)
+    x <- fill_with_higher_taxa(df = consumption_mpc,
+                          lookup_table = build_taxa_lookup(df = consumption_mpc,
+                                                           ecoregion = ecoregion),
+                          gap_filling_method = gap_filling_method,
+                          averaging = averaging, ecoregion = ecoregion)
+    
+    
     
   }
 
@@ -583,12 +853,15 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
       )
     )
   
+# Save interpolated consumption data to csv if gapfilling was done
 if (gap_filling_method != "none") {
-  write_parquet(interpolated, paste0("../output/future_catch_joined_consumption/interpolated_future_data_",gap_filling_method,"_gapfill.parquet"))
-}
-
   
-
+  out_path <- paste0("../output/future_catch_joined_consumption/interpolated_future_data_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet")
+  write_parquet(interpolated, out_path)
+  
+}
+  
+  # Pivot to longer
   future_long <- interpolated %>%
     pivot_longer(c(ssp126, ssp585), names_to = "scenario", values_to = "future_change_catch")
 
@@ -596,7 +869,7 @@ if (gap_filling_method != "none") {
   # Note: the two portfolios intentionally use different multiplier formulas —
   # the foreign portfolio handles positive/negative/zero separately to preserve
   # directionality; the total portfolio uses a single linear conversion.
-  stock_pre <- if (portfolio == "foreign") {
+  stock_pre <- if (portfolio == "foreign_portfolio") {
     future_long %>%
       filter(
         consumer_iso3c != producer_iso3c,
@@ -614,7 +887,14 @@ if (gap_filling_method != "none") {
       mutate(future_change_catch = 1 + (future_change_catch / 100))
   }
 
-  stock_pre %>%
+  # For each country, calculate the % change in aquatic food supply by calculating
+  # a weighted average of each consumed taxa's projected percentage change in 
+  # catch potential catch multiplied by by their respective proportional live
+  # weight tonnage of their total consumed weight.
+  
+  # catch projection percentages by their proportional live weight tonnage
+  # and converting to  
+  exposure <- stock_pre %>%
     mutate(change_in_stock = live_weight_t * future_change_catch) %>%
     group_by(consumer_iso3c, scenario) %>% # FIXIT: changed from consumer_iso3c to producer_iso3c - switch back
     summarise(
@@ -625,6 +905,9 @@ if (gap_filling_method != "none") {
     mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t)) # FIXIT: Use a pipe here if I am testing the expsoure
     # On producer_iso3c
     # rename(consumer_iso3c = producer_iso3c) # FIXIT: Remove this as well when done testing
+  
+  # Return exposure dataframe
+  return(exposure)
 }
 ```
 
@@ -640,8 +923,7 @@ Computes aquatic animal reliance as a share of total animal protein supply.
   aggregation needed).
 
 ```{r build-sensitivity}
-build_sensitivity <- function(dir, portfolio = c("foreign", "total")) {
-  portfolio <- match.arg(portfolio)
+build_sensitivity <- function(dir) {
 
   supply_importance <- read_csv(
     paste0(dir, "sensitivity/fao_aquatic_reliance_source.csv"),
@@ -790,13 +1072,19 @@ Calls `build_exposure()`, `build_sensitivity()`, and
 writes the output parquet.
 
 ```{r build-e-s-ac-data}
-build_e_s_ac_data <- function(portfolio = c("foreign", "total"), dir, gap_filling_method = c("none", "region", "realm")) {
+build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfolio"),
+                              dir,
+                              gap_filling_method = c("none", "region", "realm", "thorough"),
+                              averaging = c("unweighted", "weighted", "none"),
+                              consumption) {
+  
   gap_filling_method <- match.arg(gap_filling_method)
+  averaging <- match.arg(averaging)
   portfolio <- match.arg(portfolio)
   cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
 
-  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method)
-  sensitivity  <- build_sensitivity(dir, portfolio)
+  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method, averaging = averaging, consumption = consumption)
+  sensitivity  <- build_sensitivity(dir)
 
   consuming_countries <- exposure %>% distinct(consumer_iso3c) %>% pull()
   adaptive_cap <- build_adaptive_capacity(dir, consuming_countries)
@@ -804,9 +1092,15 @@ build_e_s_ac_data <- function(portfolio = c("foreign", "total"), dir, gap_fillin
   e_s_ac <- adaptive_cap %>%
     right_join(sensitivity,  by = c("consumer_iso3c" = "iso3c")) %>%
     left_join(exposure,      by = "consumer_iso3c")
+  
+  if (gap_filling_method == "none") {
+    out_path <- paste0("../output/e_s_ac/e_s_ac_", portfolio, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
+  } else {
+    out_path <- paste0("../output/e_s_ac/e_s_ac_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
+  }
 
-  out_path <- paste0("../output/e_s_ac/e_s_ac_", portfolio, "_",gap_filling_method,"_gapfill.parquet") # FIXIT: added producer, need to remove "producer" after testing
-  write_parquet(e_s_ac, out_path)
+  
+  write_csv(e_s_ac, out_path)
   cat(sprintf("✅ Saved %s\n", out_path))
 
   invisible(e_s_ac)
