@@ -1,0 +1,881 @@
+---
+title: "02_Results"
+author: "Connor Quiroz"
+date: "2026-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+library(gtools)
+```
+
+
+# Load in Data
+
+## Load in ARTIS data
+
+```{r load artis data}
+# Read in consumption data
+# Set parquet database folder location
+# db_folder <- "/Users/gephart/Library/CloudStorage/Dropbox/Research/ARTIS/ARTIS_1.1.0_FAO_2025_08_02/"
+
+# Desktop folder
+# db_folder <- paste0(here(),"/data/ARITS_1.1.0_FAO_2025_08_02")
+
+# Laptop folder
+db_folder <- "C:/Users/cjqui/Desktop/SGL/Data/ARITS_1.1.0_FAO_2025_08_02"
+
+artis_ds <- arrow::open_dataset(file.path(db_folder, "datasets", "ARTIS_consumption_v1.1.0_FAO_mid_2025-08-02.parquet"))
+
+# Summarize consumption file by source country
+artis_ts_result <- artis_ds %>%
+  filter(
+    # FBS data of interest is only for direct human consumption
+    end_use == "direct human consumption",
+    # Filter to custom time series
+    (hs_version == "HS96" & year <= 2003) |
+      (hs_version == "HS02" & year >= 2004 & year <= 2009) |
+      (hs_version == "HS07" & year >= 2010 & year <= 2012) |
+      (hs_version == "HS12" & year >= 2013 & year <= 2020)
+  ) %>%
+  # Calculate consumption total by year, consumer, source, habitat and method 
+  group_by(year, consumer_iso3c, consumption_source, habitat, method) %>%
+  summarise(consumption_live_t = sum(consumption_live_t, na.rm = TRUE))
+
+consumption_full <- artis_ts_result %>%
+  collect() %>%
+  # Simplify consumption source to just indicate foreign vs domestic
+  mutate(consumption_source = str_replace(consumption_source, " step 1", ""),
+         consumption_source = str_replace(consumption_source, " step 2", ""))
+```
+
+# Introduction
+
+## Finding: Which countries have increased their aquaculture consumption?
+
+> Source: ARTIS
+
+```{r see which countries have increasing aquauclture consumption}
+for (i in c("Africa", "North America", "South America", "Europe", "Oceania")) {
+  print(consumption_full %>% 
+  group_by(consumer_iso3c, year, method) %>%
+  summarize(sum = sum(consumption_live_t)) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(region == i,
+         method == "aquaculture") %>%
+  ggplot(aes(x = year, y = sum)) +
+  geom_line() +
+  facet_wrap(~ consumer_iso3c))
+}
+```
+
+> Countries with increasing aquauculture consumption include Australia, Nigeria, Brazil, Russia, and the United States.
+
+# Geographic sourcing contribution to climate vulnerability
+
+## Look at overall across regions
+
+```{r}
+theme_reliance <- function(base_size = 8,
+                           axis_title_x = TRUE,
+                           axis_title_y = FALSE,
+                           legend       = TRUE) {
+  base <- theme_minimal(base_size = base_size) +
+    theme(
+      text                    = element_text(family = "sans"),
+      plot.background         = element_rect(fill = "transparent", color = NA),
+      panel.background        = element_rect(fill = "transparent", color = NA),
+      panel.grid.minor        = element_blank(),
+      panel.grid.major.y      = element_line(
+        color     = scales::alpha("black", 0.06),
+        linewidth = 0.3
+      ),
+      panel.grid.major.x      = element_line(
+        color     = scales::alpha("black", 0.25),
+        linewidth = 0.3
+      ),
+      axis.text               = element_text(size = base_size - 3),   # 5 pt
+      axis.title.x            = element_text(
+        size  = base_size,
+        face  = "bold",
+        vjust = -0.5,
+        margin = margin(t = 4)
+      ),
+      axis.title.y            = element_blank(),
+      strip.text              = element_text(size = base_size - 1, face = "bold"),
+      legend.position         = if (legend) "bottom" else "none",
+      legend.title            = element_text(size = base_size - 1, face = "bold"),
+      legend.text             = element_text(size = base_size - 2),
+      legend.key.size         = unit(0.3, "cm"),
+      legend.box              = "vertical",
+      legend.spacing          = unit(0.1, "cm"),
+      legend.margin           = margin(t = 1, b = 0),
+      legend.box.margin       = margin(t = -2, b = -2),
+      legend.background       = element_rect(fill = "transparent", color = NA),
+      legend.box.background   = element_rect(fill = "transparent", color = NA),
+      plot.margin             = margin(3, 3, 3, 3)
+    )
+
+  if (!axis_title_x) {
+    base <- base + theme(axis.title.x = element_blank())
+  }
+
+  base
+}
+
+exposed_foods <- read_parquet("../output/future_catch_joined_consumption/interpolated_future_data_total_portfolio_weighted_diagonal_gapfill.parquet")
+
+plot_viz <- function(data) {
+  x <- data %>%
+    ggplot(aes(x = pct_contribution, y = consumer_iso3c, color = consumption_type)) +
+  # overall country change
+  geom_point(
+    aes(x = pct_change, y = consumer_iso3c),
+    inherit.aes = FALSE,
+    color = "black",
+    fill = "white",
+    shape = 21,
+    stroke = 1.2,
+    size = 3.8
+  ) +
+  # contribution points
+  geom_point(size = 2.5,
+             alpha = 0.8,
+             position = position_jitter(height = 0.08)) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "grey50",
+    linewidth = 0.4
+  ) +
+  facet_wrap(~ region, scales = "free_y") +
+  labs(x = "Contribution to total percent change", y = NULL, color = "Consumption type") +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),
+    legend.position = "bottom",
+    axis.text = element_text(size = 5.5)
+  ) +
+  scale_color_manual(values = c("#1f77b4","#ff7f0e"))
+  
+  return(x)
+}
+
+plot_data <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  
+  group_by(consumer_iso3c, consumption_type) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t)) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  mutate(pct_change = sum(pct_contribution)) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  ungroup() %>%
+  mutate(consumer_iso3c = fct_reorder(consumer_iso3c, -pct_change))
+
+top_panel <- plot_data %>%
+  distinct(consumer_iso3c, pct_change) %>%
+  count(condition = pct_change > 0) %>%
+  ggplot(aes(y = "", x = n, fill = condition)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = c(`FALSE` = "#B2182B", `TRUE` = "#2166AC"),
+                    labels = c(`FALSE` = "Decrease in catch", `TRUE` = "Increase in catch")) +
+  theme_reliance() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(size = 6, face = "bold"),
+    panel.grid.major.y = element_blank(),
+    aspect.ratio = 0.05,
+    legend.title = element_blank()
+  )
+
+
+
+p_top <- plot_data %>%
+  filter(region %in% c("Africa", "Asia", "Europe")) %>%
+  plot_viz() +
+  guides(color = "none") +
+  theme_reliance() +
+  theme(axis.title.x = element_blank()) 
+
+p_bottom <- plot_data %>%
+  filter(!region %in% c("Africa", "Asia", "Europe")) %>%
+  plot_viz() +
+  theme_reliance()
+
+bottom_row_narrowed <- cowplot::plot_grid(
+  NULL, p_bottom, NULL,
+  ncol       = 3,
+  rel_widths = c(0.1, 0.75, 0.1)
+)
+
+bottom_panel <- plot_grid(p_top,bottom_row_narrowed, nrow = 2, rel_heights = c(1.25,1))
+
+plot <- cowplot::plot_grid(
+  top_panel,
+  bottom_panel,
+  nrow          = 2,
+  rel_heights   = c(0.35, 2),
+  labels        = c("A", "B"),
+  label_size    = 9.5
+)
+
+# Save plot
+ggsave("../images/exploratory/regional_contribution.jpg", plot = plot, device = "jpg", width = 8, height = 6, dpi = 300)
+```
+
+
+```{r}
+plot_data %>%
+  ggplot(aes(y = consumption_type, x = pct_contribution, color = consumption_type)) +
+  geom_violin() +
+  theme_reliance() +
+  geom_jitter(alpha = 0.3) +
+  labs(x ="Contribution to percent change in aquatic food consumption", color = "Consumption source")
+
+plot_data %>%
+  ggplot(aes(x = pct_contribution, y = consumer_iso3c, color = consumption_type)) +
+  geom_point() +
+  theme_reliance() +
+  theme(axis.text.y = element_blank()) +
+  labs(x ="Contribution to percent change in aquatic food consumption", color = "Consumption source")
+
+x <- plot_data %>%
+  filter(consumption_type == "domestic") %>%
+  pull(pct_contribution)
+
+y <- plot_data %>%
+  filter(consumption_type == "foreign") %>%
+  pull(pct_contribution)
+  
+
+t.test(x,y, alternative = "less")
+```
+
+## Look within regions
+
+```{r}
+theme_si <- function(base_size = 8,
+                     show_x_title = TRUE,
+                     show_y_title = TRUE,
+                     show_legend  = TRUE) {
+
+  base <- theme_minimal(base_size = base_size) +
+    theme(
+      text                  = element_text(family = "sans", color = "black"),
+      plot.background       = element_rect(fill = "transparent", color = NA),
+      panel.background      = element_rect(fill = "transparent", color = NA),
+      panel.grid.minor      = element_blank(),
+      panel.grid.major.y    = element_line(
+        color = scales::alpha("black", 0.06), linewidth = 0.3
+      ),
+      panel.grid.major.x    = element_line(
+        color = scales::alpha("black", 0.25), linewidth = 0.3
+      ),
+      axis.text             = element_text(size = base_size - 2.5, color = "black"),
+      axis.title.x          = element_text(
+        size = base_size - 1, face = "bold",
+        margin = margin(t = 3)
+      ),
+      axis.title.y          = element_text(
+        size = base_size - 1, face = "bold",
+        margin = margin(r = 3)
+      ),
+      strip.text            = element_text(size = base_size - 1, face = "bold"),
+      legend.position       = if (show_legend) "bottom" else "none",
+      legend.title          = element_text(size = base_size - 1.5, face = "bold"),
+      legend.text           = element_text(size = base_size - 2.5),
+      legend.key.size       = unit(0.25, "cm"),
+      legend.box            = "vertical",
+      legend.spacing        = unit(0.05, "cm"),
+      legend.margin         = margin(t = 0, b = 0),
+      legend.box.margin     = margin(t = -2, b = -2),
+      legend.background     = element_rect(fill = "transparent", color = NA),
+      legend.box.background = element_rect(fill = "transparent", color = NA),
+      plot.margin           = margin(3, 4, 3, 4)
+    )
+
+  if (!show_x_title) base <- base + theme(axis.title.x = element_blank())
+  if (!show_y_title) base <- base + theme(axis.title.y = element_blank())
+  base
+}
+
+
+regions <- c("Asia", "Africa", "Europe", "North America", "South America", "Oceania")
+for (i in regions) {
+  
+  p1 <- plot_data %>%
+  filter(region == i) %>%
+  distinct(consumer_iso3c, pct_change) %>%
+  count(condition = pct_change > 0) %>%
+  ggplot(aes(y = "", x = n, fill = condition)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = c(`FALSE` = "#B2182B", `TRUE` = "#2166AC"),
+                    labels = c(`FALSE` = "Decrease in catch", `TRUE` = "Increase in catch")) +
+  theme_reliance() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(size = 6, face = "bold"),
+    panel.grid.major.y = element_blank(),
+    aspect.ratio = 0.05,
+    legend.title = element_blank()
+  ) +
+    labs(x = "Number of countries")
+
+
+both_forgn_dom <- plot_data %>%
+  filter(region == i) %>%
+  count(consumer_iso3c) %>%
+  filter(n == 2) %>%
+  pull(consumer_iso3c)
+
+p2 <- plot_data %>%
+  filter(region == i,
+         consumer_iso3c %in% both_forgn_dom) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(condition = prop_consumption == max(prop_consumption)) %>%
+  ungroup() %>%
+  count(consumption_type, condition) %>%
+  filter(consumption_type == "domestic") %>%
+  ggplot(aes(y = "", x = n, fill = condition)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = c(`FALSE` = "#ff7f0e", `TRUE` = "#1f77b4"),
+                    labels = c(`FALSE` = "Foreign dominant", `TRUE` = "Domestic dominant")) +
+  theme_reliance() +
+  theme_reliance() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(size = 6, face = "bold"),
+    panel.grid.major.y = element_blank(),
+    aspect.ratio = 0.05,
+    legend.title = element_blank()
+  ) +
+  labs(x = "Number of countries")
+
+bottom_panel <- plot_data %>%
+  filter(region == i) %>%
+  plot_viz() +
+  theme(strip.text = element_blank())
+
+top_panel <- plot_grid(p1,p2)
+
+  title_panel <- ggplot() +
+    labs(title = i) +
+    theme_void() +
+    theme(
+      plot.title = element_text(
+        hjust = 0.5, face = "bold", size = 11
+      ),
+      plot.margin = margin(15, 0, -5, 0),
+      panel.spacing = unit(0, "pt")
+    )
+  
+
+(final_plot <- plot_grid(title_panel, top_panel, bottom_panel,
+                        nrow = 3,
+                        rel_heights = c(0.005,0.1,0.45)))
+
+ggsave(paste0("../images/exploratory/contribution_",i,".jpg"), plot = final_plot, device = "jpg", width = 5, height = 7, dpi = 300)
+  
+}
+```
+
+# Taxa contribution to climate vulnerability
+
+```{r}
+# By foreign / domestic & exposed / not exposed
+exp_not_exp_sourcing_shannon <- exposed_foods %>%
+  mutate(food_is_exposed = case_when(
+    ssp126 > 0 ~ TRUE,
+    ssp126 < 0 ~ FALSE
+  )) %>%
+group_by(consumer_iso3c, consumption_type, food_is_exposed, sciname) %>%
+  summarize(sciname_total = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c, consumption_type, food_is_exposed) %>%
+  mutate(genus_total_country = sum(sciname_total)) %>%
+  ungroup() %>%
+  mutate(pi = sciname_total / genus_total_country, pi_lnpi = pi * log(pi)) %>%
+  group_by(consumer_iso3c, consumption_type, food_is_exposed) %>%
+  summarize(shannon = -sum(pi_lnpi)) %>%
+  mutate(type = paste0(consumption_type, food_is_exposed)) %>%
+  mutate(type = case_when(
+    type == "foreignFALSE" ~ "Foreign, not exposed",
+    type == "foreignTRUE" ~ "Foreign, exposed",
+    type == "domesticFALSE" ~ "Domestic, not exposed",
+    type == "domesticTRUE" ~ "Domestic, exposed"
+  )) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  group_by(consumer_iso3c) %>%
+  mutate(total_div = sum(shannon)) %>%
+  ungroup() %>%
+  mutate(consumer_iso3c = fct_reorder(consumer_iso3c, -total_div)) %>%
+  filter(!is.na(food_is_exposed)) %>%
+  select(consumer_iso3c, type, shannon)
+
+exp_not_exp_sourcing %>%
+  ggplot(aes(x = consumer_iso3c, y = shannon, fill = type)) +
+  geom_col(position = "fill") +
+  facet_wrap(~ region, scales = "free")
+
+# By exposed / not exposed
+exp_not_exp <- exposed_foods %>%
+  mutate(food_is_exposed = case_when(
+    ssp126 > 0 ~ TRUE,
+    ssp126 < 0 ~ FALSE
+  )) %>%
+group_by(consumer_iso3c, food_is_exposed, sciname) %>%
+  summarize(sciname_total = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c, food_is_exposed) %>%
+  mutate(genus_total_country = sum(sciname_total)) %>%
+  ungroup() %>%
+  mutate(pi = sciname_total / genus_total_country, pi_lnpi = pi * log(pi)) %>%
+  group_by(consumer_iso3c, food_is_exposed) %>%
+  summarize(shannon = -sum(pi_lnpi)) %>%
+  mutate(type = food_is_exposed) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  group_by(consumer_iso3c) %>%
+  mutate(total_div = sum(shannon)) %>%
+  ungroup() %>%
+  mutate(consumer_iso3c = fct_reorder(consumer_iso3c, -total_div))
+
+exp_not_exp %>%
+  ggplot(aes(x = consumer_iso3c, y = shannon, fill = type)) +
+  geom_col(position = "fill") +
+  facet_wrap(~ region, scales = "free") +
+  geom_hline(yintercept = 0.5, linetype = "dashed")
+
+
+# See how much shannon relates to the level of exposure contribution by dom / for / is exposed / not
+exp_not_exp_sourcing_contribution <- exposed_foods %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  mutate(food_is_exposed = case_when(
+    ssp126 >= 0 ~ TRUE,
+    ssp126 < 0 ~ FALSE
+  )) %>%
+  group_by(consumer_iso3c, food_is_exposed, consumption_type) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock),
+    live_weight_t   = sum(live_weight_t),
+    .groups = "drop"
+  ) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t)) %>%
+  mutate(pct_change = sum(pct_contribution)) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  ungroup() %>%
+  filter(!is.na(food_is_exposed)) %>%
+  mutate(type = paste0(consumption_type, food_is_exposed)) %>%
+  mutate(type = case_when(
+    type == "foreignFALSE" ~ "Foreign, not exposed",
+    type == "foreignTRUE" ~ "Foreign, exposed",
+    type == "domesticFALSE" ~ "Domestic, not exposed",
+    type == "domesticTRUE" ~ "Domestic, exposed"
+  )) %>%
+  select(consumer_iso3c, type, pct_contribution)
+
+exp_not_exp_sourcing_contribution %>%
+  filter(type == "Foreign, exposed") %>%
+  left_join(exp_not_exp_sourcing_shannon, by = c("consumer_iso3c", "type")) %>%
+  ggplot(aes(x = shannon, y = pct_contribution, color = type)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+  
+
+for (i in c("Foreign, not exposed",
+            "Foreign, exposed",
+            "Domestic, not exposed",
+            "Domestic, exposed")) {
+  
+  x <- exp_not_exp_sourcing_contribution %>%
+  left_join(exp_not_exp_sourcing_shannon, by = c("consumer_iso3c", "type")) %>%
+  filter(type == i)
+  
+  lm <- lm(pct_contribution ~ shannon, data = x)
+  
+  print(summary(lm))
+  
+}
+
+
+# Follow up question: what does the diversity of countries' consumption look like when compared to their exposure?
+```
+> The level of exposure on exposed foreign supplies decreases # Fixit probably delete above analysis
+
+## How does the diversity of countries' consumption compare to their level of exposure?
+
+```{r}
+exposure <- exposed_foods %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(consumer_iso3c) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) /
+           ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
+           exposure = -exposure + 1) %>%
+  select(consumer_iso3c, exposure)
+
+# By exposed / not exposed
+shannon <- exposed_foods %>%
+  group_by(consumer_iso3c, sciname) %>%
+  summarize(sciname_total = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(genus_total_country = sum(sciname_total)) %>%
+  ungroup() %>%
+  mutate(pi = sciname_total / genus_total_country, pi_lnpi = pi * log(pi)) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(shannon = -sum(pi_lnpi)) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  group_by(consumer_iso3c)
+
+exposure %>%
+  left_join(shannon, by = "consumer_iso3c") %>%
+  ggplot(aes(x = shannon, y = exposure)) +
+  geom_point() +
+  facet_wrap(~ region)
+
+  
+```
+
+
+## Is the level of exposure related to the diversity of marine taxa consumption?
+
+```{r fixit probably delete}
+# Join shannon to exposure data
+shannon_exp <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  
+  group_by(consumer_iso3c) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  ungroup() %>%
+             mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) / ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
+           exposure = -exposure + 1) %>%
+  left_join(shannon %>% select(consumer_iso3c, shannon)) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI")
+
+shannon_exp %>%
+  ggplot(aes(x = shannon, y = exposure, color = region)) +
+  geom_point() +
+  geom_smooth(method = "lm", alpha = 0.15) +
+  facet_wrap(~ region) +
+  theme_reliance() +
+  scale_color_manual(values = artis_palette(6))
+
+lm <- lm(exposure ~ shannon * region, data = shannon_exp)
+
+
+summary(lm)
+```
+
+## Globally, which are the most and least exposed species
+
+```{r}
+# Countries most exposed conusmed taxa
+taxa <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(sciname) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock),
+    live_weight_t   = sum(live_weight_t),
+    .groups = "drop"
+  ) %>%
+  ungroup() %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
+  mutate(pct_change = sum(pct_contribution, na.rm = TRUE)) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
+  ungroup()
+
+taxa %>%
+  filter(pct_contribution < 0) %>%
+  # group_by(consumer_iso3c) %>%
+  top_n(-pct_contribution, n = 5) %>%
+  ggplot(aes(x = sciname, y = pct_contribution)) +
+           geom_col()
+
+taxa %>%
+  filter(pct_contribution > 0) %>%
+  # group_by(consumer_iso3c) %>%
+  top_n(-pct_contribution, n = 5) %>%
+  ggplot(aes(x = sciname, y = pct_contribution)) +
+           geom_col()
+
+taxa_by_eez <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(consumer_iso3c, sciname) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock),
+    live_weight_t   = sum(live_weight_t),
+    .groups = "drop"
+  ) %>%
+  group_by(sciname) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
+  mutate(pct_change = sum(pct_contribution, na.rm = TRUE)) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
+  ungroup()
+
+
+most_exposed_species <- taxa %>%
+  filter(pct_contribution < 0) %>%
+  # group_by(consumer_iso3c) %>%
+  top_n(-pct_contribution, n = 5) %>%
+  pull(sciname)
+
+least_exposed_species <- taxa %>%
+  filter(pct_contribution > 0) %>%
+  # group_by(consumer_iso3c) %>%
+  top_n(pct_contribution, n = 5) %>%
+  pull(sciname)
+
+taxa_by_eez <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(eez_iso3c, sciname) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock),
+    live_weight_t   = sum(live_weight_t),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE))
+  
+  
+  # Check that the percent contributions to global exposure across EEZs for each species
+  # adds back up to the global estimate
+all.equal(
+  taxa_by_eez %>%
+  group_by(sciname) %>%
+  summarize(pct_change = sum(pct_contribution)) %>%
+  filter(sciname %in% most_exposed_species),
+  
+  taxa %>%
+  filter(pct_contribution < 0) %>%
+  # group_by(consumer_iso3c) %>%
+  top_n(-pct_contribution, n = 5) %>%
+    select(sciname, pct_change = pct_contribution)
+  )
+
+# See where most exposed species are being sourced from
+
+taxa_by_eez %>%
+  filter(sciname %in% most_exposed_species) %>%
+  group_by(sciname) %>%
+  top_n(-pct_contribution, n = 3) %>%
+  select(eez_iso3c, sciname, pct_contribution) %>%
+  ggplot(aes(x = sciname, y = pct_contribution, fill = eez_iso3c)) +
+  geom_col()
+
+
+taxa_by_eez %>%
+  filter(sciname %in% least_exposed_species) %>%
+  group_by(sciname) %>%
+  top_n(pct_contribution, n = 3) %>%
+  select(eez_iso3c, sciname, pct_contribution) %>%
+  ggplot(aes(x = sciname, y = pct_contribution, fill = eez_iso3c)) +
+  geom_col()
+
+
+taxa %>%
+  filter(pct_contribution > 0) %>%
+  # group_by(consumer_iso3c) %>%
+  top_n(pct_contribution, n = 5) %>%
+  ggplot(aes(x = sciname, y = pct_contribution)) +
+           geom_col()
+
+library(dplyr)
+library(ggplot2)
+library(ggsankey)
+library(networkD3)
+
+taxa_by_eez %>%
+  filter(sciname %in% most_exposed_species) %>%
+  group_by(sciname) %>%
+  slice_max(-pct_contribution, n = 2) %>%
+  ungroup() %>%
+  select(eez_iso3c, sciname, pct_contribution) %>%
+  mutate(eez_name = countrycode(eez_iso3c, "iso3c", "country.name")) %>%
+  make_long(sciname, eez_name, value = pct_contribution) %>%
+  ggplot(aes(x = x,
+             next_x = next_x,
+             node = node,
+             next_node = next_node,
+             value = value,
+             fill = node)) +
+  geom_sankey(flow.alpha = 0.7, node.color = "black") +
+  geom_sankey_label(aes(label = node), size = 3, color = "black") +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none")
+
+taxa_by_eez %>%
+  filter(sciname %in% least_exposed_species) %>%
+  group_by(sciname) %>%
+  slice_max(pct_contribution, n = 2) %>%
+  ungroup() %>%
+  select(eez_iso3c, sciname, pct_contribution) %>%
+  mutate(eez_name = countrycode(eez_iso3c, "iso3c", "country.name")) %>%
+  make_long(sciname, eez_name, value = pct_contribution) %>%
+  ggplot(aes(x = x,
+             next_x = next_x,
+             node = node,
+             next_node = next_node,
+             value = value,
+             fill = node)) +
+  geom_sankey(flow.alpha = 0.7, node.color = "black") +
+  geom_sankey_label(aes(label = node), size = 3, color = "black") +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none")
+```
+
+## What are the most consumed taxa that regions are consuming?
+
+```{r}
+taxa_by_region <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(region, sciname) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock),
+    live_weight_t   = sum(live_weight_t),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE))
+
+prop_consumed_in_eez <- exposed_foods %>%
+    select(-region) %>%
+    add_region("consumer_iso3c", "region") %>%
+    group_by(region, eez_iso3c, sciname) %>%
+    summarize(total_weight = sum(live_weight_t)) %>%
+    group_by(region, sciname) %>%
+    mutate(prop_in_eez = total_weight / sum(total_weight)) %>%
+    drop_na() %>%
+    select(region, eez_iso3c, sciname, prop_in_eez)
+
+# Most exposed species
+taxa_by_region %>%
+  group_by(region) %>%
+  slice_max(-pct_contribution, n = 2) %>%
+  ungroup() %>%
+  left_join(prop_consumed_in_eez, by = c("region", "sciname")) %>%
+  group_by(region, sciname) %>%
+  slice_max(prop_in_eez, n = 2) %>%   # top source EEZ per species per region
+  ungroup() %>%
+  mutate(eez_name = countrycode(eez_iso3c, "iso3c", "country.name")) %>%
+  make_long(region, sciname, eez_name, value = prop_in_eez) %>%
+  ggplot(aes(x = x,
+             next_x = next_x,
+             node = node,
+             next_node = next_node,
+             value = value,
+             fill = node)) +
+  geom_sankey(flow.alpha = 0.7, node.color = "black") +
+  geom_sankey_label(aes(label = node), size = 3, color = "black") +
+  theme_minimal() +
+  scale_x_discrete(labels = c("Consuming region", "Consumed taxa", "EEZ caught in")) +
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none")
+
+# Least exposed species
+taxa_by_region %>%
+  group_by(region) %>%
+  slice_max(pct_contribution, n = 2) %>%
+  ungroup() %>%
+  left_join(prop_consumed_in_eez, by = c("region", "sciname")) %>%
+  group_by(region, sciname) %>%
+  slice_max(prop_in_eez, n = 2) %>%   # top source EEZ per species per region
+  ungroup() %>%
+  mutate(eez_name = countrycode(eez_iso3c, "iso3c", "country.name")) %>%
+  make_long(region, sciname, eez_name, value = prop_in_eez) %>%
+  ggplot(aes(x = x,
+             next_x = next_x,
+             node = node,
+             next_node = next_node,
+             value = value,
+             fill = node)) +
+  geom_sankey(flow.alpha = 0.7, node.color = "black") +
+  geom_sankey_label(aes(label = node), size = 3, color = "black") +
+  theme_minimal() +
+  scale_x_discrete(labels = c("Consuming region", "Consumed taxa", "EEZ caught in")) +
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none")
+```
+
+### Where are these species being sourced from primarily?
+
+```{r fixit figure out what this does}
+exp_not_exp %>%
+  group_by(region) %>%
+  select(consumer_iso3c, food_is_exposed, shannon, region) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(prop = shannon / sum(shannon)) %>%
+  group_by(food_is_exposed) %>%
+  count(condition = prop > 0.5)
+```
+
+

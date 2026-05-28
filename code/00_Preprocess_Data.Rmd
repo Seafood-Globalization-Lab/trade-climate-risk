@@ -107,7 +107,7 @@ preprocess_climate_data <- function(dir) {
   invisible(df)
 }
 
-# FIXIT: integrate 
+# FIXIT: find some way to get soverign country out of string
 # dplyr::mutate(!!country_col_name := stringr::str_remove(.data[[country_col_name]], "\\(.+\\)$")) 
 ```
 
@@ -151,171 +151,189 @@ build_taxa_levels <- function(sciname_df) {
 
 # Helper: for each higher taxonomic level, compute mean SSP values per EEZ
 # so that species with missing projections can borrow from relatives
-build_taxa_lookup <- function(df, ecoregion) {
-  tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
+generate_mcp_averages <- function(df,
+                                  method = c("eez", "realm", "region", "global"),
+                                  averaging = c("unweighted", "weighted"),
+                                  ecoregion) {
   
-  # Compute weighted average
-  wmean <- function(x, w) sum(w * x, na.rm = TRUE) / sum(w, na.rm = TRUE)
-  # Compute weighted coefficient of variation
-  wcv <- function(x, w) {
-    m <- wmean(x, w)
-    s <- sqrt(sum(w * (x - m)^2, na.rm = TRUE) / sum(w, na.rm = TRUE))
-    s / m
-  }
+  method <- match.arg(method)
+  averaging <- match.arg(averaging)
+  tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
+  
+  x <- map_dfr(tax_levels, function(level) {
+    
+    # Based on function input, group by function method input
+    group_cols <- switch(
+      method,
+      eez   = c("eez_iso3c", level),
+      realm = c("realm", level),
+      region = c("region", level),
+      global = c(level)
+    )
+    
+    if (averaging == "weighted") { # Compute weighted avearages
+      
+      df2 <- df %>%
+      distinct() %>%
+      left_join(
+        ecoregion %>% select(iso3c, realm),
+        by = c("eez_iso3c" = "iso3c")
+      ) %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      add_region("eez_iso3c", "region") %>%
+      group_by(sciname, !!sym(group_cols[1])) %>%
+      summarize(live_weight_t = sum(live_weight_t)) %>%
+      ungroup() %>%
+      distinct(!!sym(group_cols[1]), sciname, .keep_all = TRUE)
+      
+      # Join ssp estimates back onto df dataset
+      df2 <- df2 %>%
+        left_join(
+          df %>%
+            add_region("eez_iso3c", "region") %>%
+            left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
+            filter(!is.na(ssp126)) %>%
+            distinct(sciname, across(all_of(group_cols)), ssp126, ssp585),
+          by = setNames(
+            c("sciname", group_cols[1]),
+            c("sciname", group_cols[1])
+            )
+        )
+      
+      out <- df2 %>%
+        group_by(across(all_of(group_cols))) %>%
+        mutate(total_live_weight_group = sum(live_weight_t)) %>%
+        
+        summarize(
+          # Weighted averages
+          
+          !!paste0(method, "_avg_ssp126") := weighted.mean(ssp126, live_weight_t, na.rm = TRUE),
+          !!paste0(method, "_avg_ssp585") := sum(ssp585 * (live_weight_t / total_live_weight_group)),
+
+          # Weighted Coefficients of variation
+          !!paste0(method, "_cv_ssp126") := {
+            
+            wm <- weighted.mean(ssp126, live_weight_t, na.rm = TRUE)
+
+            wvar <- sum(live_weight_t * (ssp126 - wm)^2, na.rm = TRUE) /
+              sum(live_weight_t, na.rm = TRUE)
+
+            sqrt(wvar) / wm
+            
+          },
+          
+          !!paste0(method, "_cv_ssp585") := {
+            
+            wm <- weighted.mean(ssp585, live_weight_t, na.rm = TRUE)
+
+            wvar <- sum(live_weight_t * (ssp585 - wm)^2, na.rm = TRUE) /
+              sum(live_weight_t, na.rm = TRUE)
+
+            sqrt(wvar) / wm
+            
+          }
+        ) %>%
+        ungroup()
+      
+    } else { # Compute unweighted averages
+      
+      df2 <- df %>%
+      distinct() %>%
+      left_join(
+        ecoregion %>% select(iso3c, realm),
+        by = c("eez_iso3c" = "iso3c")
+      ) %>%
+      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+      add_region("eez_iso3c", "region") %>%
+      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
+      group_by(across(all_of(group_cols)))
+      
+      out <- df2 %>%
+        summarise(
+          !!paste0(method, "_avg_ssp126") := mean(ssp126, na.rm = TRUE),
+          !!paste0(method, "_avg_ssp585") := mean(ssp585, na.rm = TRUE),
+          
+          !!paste0(method, "_cv_ssp126") :=
+            sd(ssp126, na.rm = TRUE) / mean(ssp126, na.rm = TRUE),
+          
+          !!paste0(method, "_cv_ssp585") :=
+            sd(ssp585, na.rm = TRUE) / mean(ssp585, na.rm = TRUE)
+        ) %>%
+        ungroup()
+      
+    }
+    
+    out %>%
+      rename(taxa_name = all_of(level)) %>%
+      mutate(taxa_level = level)
+    
+  })
+  
+  return(x)
+  
+}
+
+# Helper: compile averages across all gap filling combinations into a list
+# that will be used to gap fill NA MCP projections in consumption data
+build_taxa_lookup <- function(df, ecoregion) {
+  tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
 
   # For each taxa in an EEZ, compute the average ssp126 / 585 value for all species within in the taxa
   
-  ## EEZ level gap filling
-  ### Unweighted averaging
-  eez_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      group_by(eez_iso3c, !!sym(level)) %>%
-      summarise(
-        eez_avg_ssp126 = mean(ssp126, na.rm = TRUE),
-        eez_avg_ssp585 = mean(ssp585, na.rm = TRUE),
-        cv_ssp126 = sd(ssp126, na.rm = TRUE) / eez_avg_ssp126,
-        cv_ssp585 = sd(ssp585, na.rm = TRUE) / eez_avg_ssp585,
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  # ---------------------------------------------------------------------------
+  # EEZ-level averages
+  # ---------------------------------------------------------------------------
   
-  ### Weighted averaging
-  eez_gapfills_wgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      group_by(eez_iso3c, !!sym(level)) %>%
-      summarise(
-        eez_avg_ssp126 = wmean(ssp126, live_weight_t),
-        eez_avg_ssp585 = wmean(ssp585, live_weight_t),
-        cv_ssp126 = wcv(ssp126, live_weight_t),
-        cv_ssp585 = wcv(ssp585, live_weight_t),
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  eez_gapfills_unwgt <- generate_mcp_averages(df = df,
+                                              method = "eez",
+                                              averaging = "unweighted",
+                                              ecoregion = ecoregion)
   
-  ## Region level gap filling
-  ### Unweighted averaging
-  region_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      add_region("eez_iso3c", "region") %>%
-      group_by(region, !!sym(level)) %>%
-      summarise(
-        region_avg_ssp126 = mean(ssp126, na.rm = TRUE),
-        region_avg_ssp585 = mean(ssp585, na.rm = TRUE),
-        cv_ssp126 = sd(ssp126, na.rm = TRUE) / region_avg_ssp126,
-        cv_ssp585 = sd(ssp585, na.rm = TRUE) / region_avg_ssp585,
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  eez_gapfills_wgt <- generate_mcp_averages(df = df,
+                                              method = "eez",
+                                              averaging = "weighted",
+                                              ecoregion = ecoregion)
+
+  # ---------------------------------------------------------------------------
+  # Realm-level averages
+  # ---------------------------------------------------------------------------
   
-  ### Weighted averaging
-  region_gapfills_wgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      add_region("eez_iso3c", "region") %>%
-      group_by(region, !!sym(level)) %>%
-      summarise(
-        region_avg_ssp126 = wmean(ssp126, live_weight_t),
-        region_avg_ssp585 = wmean(ssp585, live_weight_t),
-        cv_ssp126 = wcv(ssp126, live_weight_t),
-        cv_ssp585 = wcv(ssp585, live_weight_t),
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  realm_gapfills_unwgt <- generate_mcp_averages(df = df,
+                                              method = "realm",
+                                              averaging = "unweighted",
+                                              ecoregion = ecoregion)
   
-  ## Realm level gap filling
-  ### Unweighted averaging
-  realm_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      group_by(realm, !!sym(level)) %>%
-      summarise(
-        realm_avg_ssp126 = mean(ssp126, na.rm = TRUE),
-        realm_avg_ssp585 = mean(ssp585, na.rm = TRUE),
-        cv_ssp126 = sd(ssp126) / realm_avg_ssp126,
-        cv_ssp585 = sd(ssp585) / realm_avg_ssp585,
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  realm_gapfills_wgt <- generate_mcp_averages(df = df,
+                                              method = "realm",
+                                              averaging = "weighted",
+                                              ecoregion = ecoregion)
   
-  # Weighted averaging
-  realm_gapfills_wgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      group_by(realm, !!sym(level)) %>%
-      summarise(
-        realm_avg_ssp126 = wmean(ssp126, live_weight_t),
-        realm_avg_ssp585 = wmean(ssp585, live_weight_t),
-        cv_ssp126 = wcv(ssp126, live_weight_t),
-        cv_ssp585 = wcv(ssp585, live_weight_t),
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  # ---------------------------------------------------------------------------
+  # Region-level averages
+  # ---------------------------------------------------------------------------
+  region_gapfills_unwgt <- generate_mcp_averages(df = df,
+                                              method = "region",
+                                              averaging = "unweighted",
+                                              ecoregion = ecoregion)
   
-  ### Global level gapfilling
-  # Unweighted averaging
-  global_gapfills_unwgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(sciname, .keep_all = TRUE) %>%
-      group_by(!!sym(level)) %>%
-      summarise(
-        global_avg_ssp126 = mean(ssp126, na.rm = TRUE),
-        global_avg_ssp585 = mean(ssp585, na.rm = TRUE),
-        cv_ssp126 = sd(ssp126) / global_avg_ssp126,
-        cv_ssp585 = sd(ssp585) / global_avg_ssp585,
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  region_gapfills_wgt <- generate_mcp_averages(df = df,
+                                              method = "region",
+                                              averaging = "weighted",
+                                              ecoregion = ecoregion)
   
-  # Weighted averaging
-  global_gapfills_wgt <- map_dfr(tax_levels, function(level) {
-    df %>%
-      distinct() %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      distinct(sciname, .keep_all = TRUE) %>%
-      group_by(!!sym(level)) %>%
-      summarise(
-        global_avg_ssp126 = wmean(ssp126, live_weight_t),
-        global_avg_ssp585 = wmean(ssp585, live_weight_t),
-        cv_ssp126 = wcv(ssp126, live_weight_t),
-        cv_ssp585 = wcv(ssp585, live_weight_t),
-        .groups = "drop"
-      ) %>%
-      rename(taxa_name = !!sym(level)) %>%
-      mutate(taxa_level = level)
-  })
+  # ---------------------------------------------------------------------------
+  # Global-level averages
+  # ---------------------------------------------------------------------------
+  
+  global_gapfills_unwgt <- generate_mcp_averages(df = df,
+                                              method = "global",
+                                              averaging = "unweighted",
+                                              ecoregion = ecoregion)
+  
+  global_gapfills_wgt <- generate_mcp_averages(df = df,
+                                              method = "global",
+                                              averaging = "weighted",
+                                              ecoregion = ecoregion)
   
   return(list(
     eez_gapfills_unwgt = eez_gapfills_unwgt,
@@ -332,246 +350,305 @@ build_taxa_lookup <- function(df, ecoregion) {
 
 # Helper: walk up the taxonomic ladder and fill NA SSP values from the nearest
 # available ancestor within the same EEZ
+fill_higher_taxa_helper <- function(df,
+                                    gap_filling_method,
+                                    averaging,
+                                    ecoregion,
+                                    lookup_table,
+                                    level,
+                                    join_by_map) {
+  
+  suffix <- if (averaging == "weighted") "wgt" else "unwgt"
+  selector <- paste0(gap_filling_method,"_gapfills_",suffix)
+  
+  if (level == "genus") {
+    
+    if (gap_filling_method == "realm") {
+      df <- df %>%
+        left_join(ecoregion %>% select(iso3c, realm), by = c("eez_iso3c" = "iso3c"))
+    } else if (gap_filling_method == "region") {
+      df <- df %>%
+        add_region("eez_iso3c", "region")
+    }
+    
+  }
+  
+  # Based on function input, group by function method input
+  join_cols <- switch(
+    gap_filling_method,
+    eez   = c("eez_iso3c", join_by_map),
+    realm = c("realm", join_by_map),
+    region = c("region", join_by_map),
+    global = c(join_by_map)
+  )
+  
+  df <- df %>%
+    select(-taxa_level) %>%
+    ## Join data to EEZ interpolated data
+    left_join(
+      lookup_table[[selector]] %>% filter(taxa_level == level),
+      by = join_cols) %>%
+    ## Conduct EEZ gapfills
+    ### Only assign the gapfill method if there was actually a gapfill occurring
+    ### Only assign the taxonomic level for which the gapfill was performed at
+    ### if a gapfill occurred
+    mutate(
+      gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
+        is.na(ssp126) & !is.na(!!sym(paste0(gap_filling_method,"_avg_ssp126"))) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
+        TRUE                                              ~ gapfill_level
+      ),
+      gapfill_method = case_when(
+        is.na(ssp126) & !is.na(!!sym(paste0(gap_filling_method,"_avg_ssp126"))) ~ paste0(gap_filling_method,"_gapfill"),
+        TRUE                                              ~ gapfill_method
+      ),
+      ssp126 = coalesce(ssp126, !!sym(paste0(gap_filling_method,"_avg_ssp126"))),
+      ssp585 = coalesce(ssp585, !!sym(paste0(gap_filling_method,"_avg_ssp585"))),
+      cv_ssp126 = coalesce(cv_ssp126, !!sym(paste0(gap_filling_method,"_cv_ssp126"))),
+      cv_ssp585 = coalesce(cv_ssp585, !!sym(paste0(gap_filling_method,"_cv_ssp585")))
+    ) %>%
+    select(-!!sym(paste0(gap_filling_method,"_avg_ssp126")),
+           -!!sym(paste0(gap_filling_method,"_avg_ssp585")),
+           -!!sym(paste0(gap_filling_method,"_cv_ssp126")),
+           -!!sym(paste0(gap_filling_method,"_cv_ssp585")))
+  
+  return(df)
+  
+}
+
+# Helper: conduct gap filling based on selected method
 fill_with_higher_taxa <- function(df,
-                                  lookup_table,
                                   gap_filling_method,
                                   averaging,
                                   ecoregion) {
   
-  # Set taxonomic levels to iterate through
-  tax_levels <- c("genus", "subfamily", "family", "order", "class", "phylum")
-
-  # Create empty dataframe of interpolations
-  df <- df %>% mutate(gapfill_level = NA_character_, gapfill_method = NA_character_)
-  
-  # Create variable that will dynamically join to the lookup table
-  # so that only the target data is used
-  if (averaging == "weighted" & gap_filling_method != "thorough") {
-    eez_str <- paste0("eez_gapfills_wgt")
-    second_lookup <- paste0(gap_filling_method,"_gapfills_wgt")
+  if(!file.exists("../data/exposure/lookup_table.rds")) {
     
+    # Build lookup_table
+    lookup_table <- build_taxa_lookup(df = df, ecoregion = ecoregion)
+    saveRDS(lookup_table, "../data/exposure/lookup_table.rds")
+  
   } else {
     
-    eez_str <- paste0("eez_gapfills_unwgt")
-    second_lookup <- paste0(gap_filling_method,"_gapfills_unwgt")
+    lookup_table <- readRDS("../data/exposure/lookup_table.rds")
     
   }
+  
+  
+  # Set taxonomic levels to iterate through
+  tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
 
-  # Run through EEZ averaged gapfilling first
-  for (level in tax_levels) {
+  # Create empty variables that will be filled as gap filling happens
+  out_df <- df %>% mutate(gapfill_level = NA_character_,
+                      gapfill_method = NA_character_,
+                      cv_ssp126 = NA,
+                      cv_ssp585 = NA)
+
+  # ---------------------------------------------------------------------------
+  # EEZ-level gap filling
+  # ---------------------------------------------------------------------------
+  if (gap_filling_method != "hierarchical" & gap_filling_method != "diagonal") {
+   
+    for (level in tax_levels) {
+      
+      join_by_map <- setNames("taxa_name", level)
+      
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "eez",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
     
-    # Create a variable that will dynamically select column names to join
-    # consumption data to catch projection gap filled values
-    # based on taxa level
-    join_by_map <- setNames("taxa_name", level)
-
-    df <- df %>%
-      select(-taxa_level) %>%
-      ## Join data to EEZ interpolated data
-      left_join(
-        lookup_table[[eez_str]] %>% filter(taxa_level == level),
-        by = c("eez_iso3c", join_by_map)
-      ) %>%
-      ## Conduct EEZ gapfills
-      ### Only assign the gapfill method if there was actually a gapfill occurring
-      ### Only assign the taxonomic level for which the gapfill was performed at
-      ### if a gapfill occurred
-      mutate(
-        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
-          is.na(ssp126) & !is.na(eez_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
-          TRUE                                              ~ gapfill_level
-        ),
-        gapfill_method = case_when(
-          is.na(ssp126) & !is.na(eez_avg_ssp126) ~ "eez_gapfill",
-          TRUE                                              ~ gapfill_method
-        ),
-        ssp126 = coalesce(ssp126, eez_avg_ssp126),
-        ssp585 = coalesce(ssp585, eez_avg_ssp585),
-      ) %>%
-      select(-eez_avg_ssp126, -eez_avg_ssp585)
+    }
+  
+  # ---------------------------------------------------------------------------
+  # Realm-level gap filling
+  # ---------------------------------------------------------------------------
+  
+  if (gap_filling_method == "realm") {
+    
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level) 
+    
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "realm",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
+    }
+    
   }
-  
-  # Run through realm/region averaged gapfilling second
-  
+    
+    
+  # ---------------------------------------------------------------------------
+  # Region-level gap filling
+  # ---------------------------------------------------------------------------
   if (gap_filling_method == "region") {
     
     for (level in tax_levels) {
-    join_by_map <- setNames("taxa_name", level)
+    join_by_map <- setNames("taxa_name", level) 
     
-    if (level == "genus") { # Only do on first loop iteration
-      df <- df %>%
-        add_region("eez_iso3c", "region")
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "region",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
     }
     
-    df <- df %>%
-      select(-taxa_level) %>%
-    # Join data to Region interpolated data
-      left_join(
-        lookup_table[[second_lookup]] %>% filter(taxa_level == level),
-        by = c("region", join_by_map)
-      ) %>%
-        mutate(
-        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
-          is.na(ssp126) & !is.na(region_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
-          TRUE                                              ~ gapfill_level
-        ),
-        gapfill_method = case_when(
-          is.na(ssp126) & !is.na(region_avg_ssp126) ~ "region_gapfill",
-          TRUE                                              ~ gapfill_method
-        ),
-        ssp126 = coalesce(ssp126, region_avg_ssp126),
-        ssp585 = coalesce(ssp585, region_avg_ssp585),
-      ) %>%
-      select(-region_avg_ssp126, -region_avg_ssp585)  
   }
     
-  } else if (gap_filling_method == "realm") {
+  # ---------------------------------------------------------------------------
+  # Realm --> Region --> Global gapfilling 
+  # ---------------------------------------------------------------------------
+  if (gap_filling_method == "thorough") {
     
     for (level in tax_levels) {
-    join_by_map <- setNames("taxa_name", level)
-    
-    if (level == "genus") { # Only do on first loop iteration
-      df <- df %>%
-        # FIXIT: Do we want to go more specific tham realm? The order of specificity from most to least
-        # specific classification is realm, province, and realm
-        left_join(ecoregion %>% select(iso3c, realm), by = c("eez_iso3c" = "iso3c"))
-    }
-    
-    df <- df %>%
-      select(-taxa_level) %>%
-    # Join data to Region interpolated data
-      left_join(
-        lookup_table[[second_lookup]] %>% filter(taxa_level == level),
-        by = c("realm", join_by_map)
-      ) %>%
-        mutate(
-        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
-          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
-          TRUE                                              ~ gapfill_level
-        ),
-        gapfill_method = case_when(
-          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ "realm_gapfill",
-          TRUE                                              ~ gapfill_method
-        ),
-        ssp126 = coalesce(ssp126, realm_avg_ssp126),
-        ssp585 = coalesce(ssp585, realm_avg_ssp585),
-      ) %>%
-      select(-realm_avg_ssp126, -realm_avg_ssp585)  
-    }
-    
-  } else if (gap_filling_method == "thorough") {
-    
-    if (averaging == "weighted") {
       
-    second_lookup <- "realm_gapfills_wgt"
-    third_lookup <-  "region_gapfills_wgt"
-    fourth_lookup <- "global_gapfills_wgt"
+      join_by_map <- setNames("taxa_name", level) 
+      
+      # 1. Attempt realm-level gap fills
+      out_df <- fill_higher_taxa_helper(out_df,
+                                    gap_filling_method = "realm",
+                                    averaging = averaging,
+                                    lookup_table = lookup_table,
+                                    ecoregion = ecoregion,
+                                    level = level,
+                                    join_by_map = join_by_map)
+      
+    }
     
-  } else {
-    
-    second_lookup <- "realm_gapfills_unwgt"
-    third_lookup <-  "region_gapfills_unwgt"
-    fourth_lookup <- "global_gapfills_unwgt"
-    
-  }
-    
-    # Second gapfill level: Realm-level averaging
     for (level in tax_levels) {
-    join_by_map <- setNames("taxa_name", level)
-    
-    if (level == "genus") { # Only do on first loop iteration
-      df <- df %>%
-        # FIXIT: Do we want to go more specific tham realm? The order of specificity from most to least
-        # specific classification is realm, province, and realm
-        left_join(ecoregion %>% select(iso3c, realm), by = c("eez_iso3c" = "iso3c"))
+      
+      join_by_map <- setNames("taxa_name", level) 
+      
+      # 2. Attempt region-level gap fills
+      out_df <- fill_higher_taxa_helper(out_df,
+                                    gap_filling_method = "region",
+                                    averaging = averaging,
+                                    lookup_table = lookup_table,
+                                    ecoregion = ecoregion,
+                                    level = level,
+                                    join_by_map = join_by_map)
+      
     }
     
-    df <- df %>%
-      select(-taxa_level) %>%
-    # Join data to Region interpolated data
-      left_join(
-        lookup_table[[second_lookup]] %>% filter(taxa_level == level),
-        by = c("realm", join_by_map)
-      ) %>%
-        mutate(
-        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
-          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
-          TRUE                                              ~ gapfill_level
-        ),
-        gapfill_method = case_when(
-          is.na(ssp126) & !is.na(realm_avg_ssp126) ~ "realm_gapfill",
-          TRUE                                              ~ gapfill_method
-        ),
-        ssp126 = coalesce(ssp126, realm_avg_ssp126),
-        ssp585 = coalesce(ssp585, realm_avg_ssp585),
-      ) %>%
-      select(-realm_avg_ssp126, -realm_avg_ssp585)  
-    }
-    
-    # Third gapfill level: Region-level averaging
     for (level in tax_levels) {
-    join_by_map <- setNames("taxa_name", level)
-    
-    if (level == "genus") { # Only do on first loop iteration
-      df <- df %>%
-        add_region("eez_iso3c", "region")
-    }
-    
-    df <- df %>%
-      select(-taxa_level) %>%
-    # Join data to Region interpolated data
-      left_join(
-        lookup_table[[third_lookup]] %>% filter(taxa_level == level),
-        by = c("region", join_by_map)
-      ) %>%
-        mutate(
-        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
-          is.na(ssp126) & !is.na(region_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
-          TRUE                                              ~ gapfill_level
-        ),
-        gapfill_method = case_when(
-          is.na(ssp126) & !is.na(region_avg_ssp126) ~ "region_gapfill",
-          TRUE                                              ~ gapfill_method
-        ),
-        ssp126 = coalesce(ssp126, region_avg_ssp126),
-        ssp585 = coalesce(ssp585, region_avg_ssp585),
-      ) %>%
-      select(-region_avg_ssp126, -region_avg_ssp585)  
-    }
-    
-    # Fourth gapfill level: Global-level averaging
-    for (level in tax_levels) {
-    join_by_map <- setNames("taxa_name", level)
-    
-    df <- df %>%
-      select(-taxa_level) %>%
-    # Join data to Region interpolated data
-      left_join(
-        lookup_table[[fourth_lookup]] %>% filter(taxa_level == level),
-        by = join_by_map
-      ) %>%
-        mutate(
-        gapfill_level = case_when( ## Define at which taxa level gap filled data was gotten from
-          is.na(ssp126) & !is.na(global_avg_ssp126) ~ level, # Data coverage between ssp126/585 are the same, so we only need to check one variable
-          TRUE                                              ~ gapfill_level
-        ),
-        gapfill_method = case_when(
-          is.na(ssp126) & !is.na(global_avg_ssp126) ~ "global_gapfill",
-          TRUE                                              ~ gapfill_method
-        ),
-        ssp126 = coalesce(ssp126, global_avg_ssp126),
-        ssp585 = coalesce(ssp585, global_avg_ssp585),
-      ) %>%
-      select(-global_avg_ssp126, -global_avg_ssp585)  
-    }
+      
+      join_by_map <- setNames("taxa_name", level) 
+      
+      # 2. Attempt region-level gap fills
+      out_df <- fill_higher_taxa_helper(out_df,
+                                    gap_filling_method = "global",
+                                    averaging = averaging,
+                                    lookup_table = lookup_table,
+                                    ecoregion = ecoregion,
+                                    level = level,
+                                    join_by_map = join_by_map)
       
     }
   
+  }
+    
+  }
+
+  # ---------------------------------------------------------------------------
+  # Hierarchical gapfilling 
+  # ---------------------------------------------------------------------------
+  if (gap_filling_method == "hierarchical") {
+    
+    for (level in tax_levels) {
+    join_by_map <- setNames("taxa_name", level)
+
+    # 1. Attempt EEZ-level gap fills
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "eez",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
+
+    # 2. Attempt realm-level gap fills
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "realm",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
+
+    # 3. Attempt region-level gap fills
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "region",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
+
+    # 4. Attempt global-level gap fills
+    out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = "global",
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = level,
+                                  join_by_map = join_by_map)
+    }
+    
+  }
+  
+
+  
+  # ---------------------------------------------------------------------------
+  # Diagonal gapfilling 
+  # ---------------------------------------------------------------------------
+  if (gap_filling_method == "diagonal") {
+    
+    # 1. Initialize the 7x4 matrix
+    pattern <- matrix(data = c(1,3,6,10,2,5,9,14,4,8,13,18,7,12,
+                               17,21,11,16,20,23,15,19,22,24), nrow = 6, ncol = 4,
+                      byrow = TRUE)
+    
+    colnames(pattern) <- c("eez", "realm", "region", "global")
+    rownames(pattern) <- c("genus", "family", "order", "class", "phylum", "kingdom")
+    
+    
+    lookup <- expand.grid(row = rownames(pattern), col = colnames(pattern))
+    lookup$value <- as.vector(pattern)
+    
+    lookup <- lookup[order(lookup$value), ]
+    
+    lookup$col <- as.character(lookup$col)
+    lookup$row <- as.character(lookup$row)
+    
+    for (i in 1:nrow(lookup)) {
+      
+      # Set join by map key (e.g., join by EEZ & genus, EEZ & family, realm & phylum, etc)
+      join_by_map <- setNames("taxa_name", lookup[,1][i])
+      
+      out_df <- fill_higher_taxa_helper(out_df,
+                                  gap_filling_method = lookup$col[lookup$value == i],
+                                  averaging = averaging,
+                                  lookup_table = lookup_table,
+                                  ecoregion = ecoregion,
+                                  level = lookup$row[lookup$value == i],
+                                  join_by_map = join_by_map)
+      
+    }
+    
+  }
+
   # Post gapfilling, delineate whether the gapfilling
   # was not needed or was unable to be performed.
   # Gapfill levels / methods are otherwise left unchanged.
   
-  df <- df %>%
+  out_df <- out_df %>%
     mutate(gapfill_method = case_when(
       !is.na(ssp126) & is.na(gapfill_method) ~ "Gapfill not needed",
       is.na(ssp126) ~ "Unsuccessful gapfill",
@@ -588,7 +665,7 @@ fill_with_higher_taxa <- function(df,
     ) %>% 
     select(-taxa_level) # not needed in final output
   
-  return(df)
+  return(out_df)
 }
 
 build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption) {
@@ -686,6 +763,8 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
   ## Remove file_found_in variable (only needed for data coverage diagnostics)
   ## Also drop NAs so that no na EEZs are joined to potential NAs in consumption
   ## data with EEZs
+  
+  ## Read in Juliano's mcp data
   climate_by_spp_eez <- climate_by_spp_eez %>%
     select(-file_found_in) %>%
     drop_na()
@@ -806,14 +885,41 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
   ### Combine Juliano's pre and post-corrected naming data.
   climate_by_spp_eez_combined <- bind_rows(climate_by_spp_eez, climate_by_spp_eez_corrected) %>%
     group_by(eez_iso3c, sciname) %>%
-    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+    summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE))) %>%
+    ungroup()
   
   ### For each species, average mcp projections across territories with an EEZ
   
   ### Join consumption data to catch projections
     consumption_mpc <- consumption %>%
     left_join(sciname_taxa, by = c("sciname" = "sciname")) %>%
-    left_join(climate_by_spp_eez_combined, by = c("eez_iso3c", "sciname"))
+      # Clean only artis sciname that didn't have data in sciname table
+    left_join(climate_by_spp_eez_combined, by = c("eez_iso3c", "sciname")) %>%
+      mutate(
+        genus = case_when(
+          sciname == "crassostrea gigas" ~ "crassostrea", TRUE ~ genus
+        ),
+        subfamily = case_when(
+          sciname == "crassostrea gigas" ~ "crassostreinae", TRUE ~ subfamily
+        ),
+        family = case_when(
+          sciname == "crassostrea gigas" ~ "ostreidae", TRUE ~ family
+        ),
+        order = case_when(
+          sciname == "crassostrea gigas" ~ "ostreidae", TRUE ~ order
+        ),
+        class = case_when(
+          sciname == "crassostrea gigas" ~ "bivalvia", TRUE ~ class
+        ),
+        phylum = case_when(
+          sciname == "crassostrea gigas" ~ "mollusca", 
+          sciname == "petromyzon marinus" ~ "chordata",
+          TRUE ~ phylum,
+        ),
+        kingdom = case_when(
+          sciname == "crassostrea gigas" ~ "animalia", TRUE ~ kingdom
+        )
+      )
   
   #### Use gap filling if user input says to, otherwise avoid
   if (gap_filling_method == "none") {
@@ -822,12 +928,12 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
     
   } else {
     
+    # fixit: maybe don't need lookup_table as a input here? but in the embedded
+    # function
     x <- fill_with_higher_taxa(df = consumption_mpc,
-                          lookup_table = build_taxa_lookup(df = consumption_mpc,
-                                                           ecoregion = ecoregion),
-                          gap_filling_method = gap_filling_method,
-                          averaging = averaging, ecoregion = ecoregion)
-    
+                               gap_filling_method = gap_filling_method,
+                               averaging = averaging,
+                               ecoregion = ecoregion)
     
     
   }
@@ -899,9 +1005,9 @@ if (gap_filling_method != "none") {
     group_by(consumer_iso3c, scenario) %>% # FIXIT: changed from consumer_iso3c to producer_iso3c - switch back
     summarise(
       change_in_stock = sum(change_in_stock),
-      live_weight_t   = sum(live_weight_t),
-      .groups = "drop"
+      live_weight_t   = sum(live_weight_t)
     ) %>%
+    ungroup() %>%
     mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t)) # FIXIT: Use a pipe here if I am testing the expsoure
     # On producer_iso3c
     # rename(consumer_iso3c = producer_iso3c) # FIXIT: Remove this as well when done testing
@@ -941,7 +1047,8 @@ build_sensitivity <- function(dir) {
   # Calculate reiance on marine capture
   mc <- base %>%
       group_by(iso3c) %>%
-      summarise(mc_reliance_pct = sum(prop_animal_protein), .groups = "drop")
+      summarise(mc_reliance_pct = sum(prop_animal_protein)) %>%
+      ungroup()
   
   # combine foreign / marine capture reliance data
   foreign_mc <- left_join(foreign, mc, by = "iso3c")
@@ -1074,7 +1181,7 @@ writes the output parquet.
 ```{r build-e-s-ac-data}
 build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfolio"),
                               dir,
-                              gap_filling_method = c("none", "region", "realm", "thorough"),
+                              gap_filling_method = c("none", "region", "realm", "thorough", "hierarchical", "diagonal"),
                               averaging = c("unweighted", "weighted", "none"),
                               consumption) {
   
