@@ -154,7 +154,8 @@ build_taxa_levels <- function(sciname_df) {
 generate_mcp_averages <- function(df,
                                   method = c("eez", "realm", "region", "global"),
                                   averaging = c("unweighted", "weighted"),
-                                  ecoregion) {
+                                  ecoregion,
+                                  num_species) {
   
   method <- match.arg(method)
   averaging <- match.arg(averaging)
@@ -174,17 +175,15 @@ generate_mcp_averages <- function(df,
     if (averaging == "weighted") { # Compute weighted avearages
       
       df2 <- df %>%
-      distinct() %>%
-      left_join(
-        ecoregion %>% select(iso3c, realm),
-        by = c("eez_iso3c" = "iso3c")
-      ) %>%
-      filter(!is.na(ssp126) | !is.na(ssp585)) %>%
-      add_region("eez_iso3c", "region") %>%
-      group_by(sciname, !!sym(group_cols[1])) %>%
-      summarize(live_weight_t = sum(live_weight_t)) %>%
-      ungroup() %>%
-      distinct(!!sym(group_cols[1]), sciname, .keep_all = TRUE)
+        filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+        group_by(sciname, eez_iso3c) %>%
+        summarize(live_weight_t = sum(live_weight_t)) %>%
+        ungroup() %>%
+        left_join(
+          ecoregion %>% select(iso3c, realm),
+          by = c("eez_iso3c" = "iso3c")
+        ) %>%
+        add_region("eez_iso3c", "region")
       
       # Join ssp estimates back onto df dataset
       df2 <- df2 %>%
@@ -193,12 +192,18 @@ generate_mcp_averages <- function(df,
             add_region("eez_iso3c", "region") %>%
             left_join(ecoregion, by = c("eez_iso3c" = "iso3c")) %>%
             filter(!is.na(ssp126)) %>%
-            distinct(sciname, across(all_of(group_cols)), ssp126, ssp585),
-          by = setNames(
-            c("sciname", group_cols[1]),
-            c("sciname", group_cols[1])
-            )
+            distinct(sciname, across(all_of(c("eez_iso3c", group_cols[length(group_cols)]))), ssp126, ssp585),
+          by = c("sciname", "eez_iso3c")
         )
+      
+      # Allow averages to only include at least X species (so that one species doesn't dominate).
+      # Number of minimum species used for gapfilling depends on user input
+      df2 <- df2 %>%
+        group_by(across(all_of(c(group_cols[1], level)))) %>%
+        mutate(n = n_distinct(sciname)) %>%   # Fixit: Currently set to minimum number of species. Do we want this to be minimum number of eez / iso3c pairs? That would be much easier to satisfy.
+        ungroup() %>%
+        filter(n >= num_species)
+
       
       out <- df2 %>%
         group_by(across(all_of(group_cols))) %>%
@@ -245,10 +250,18 @@ generate_mcp_averages <- function(df,
       ) %>%
       filter(!is.na(ssp126) | !is.na(ssp585)) %>%
       add_region("eez_iso3c", "region") %>%
-      distinct(eez_iso3c, sciname, .keep_all = TRUE) %>%
-      group_by(across(all_of(group_cols)))
+      distinct(eez_iso3c, sciname, .keep_all = TRUE)
+      
+      
+      # Allow averages to only include at least 2 species (so that one species doesn't dominate)
+      df2 <- df2 %>%
+        group_by(across(all_of(c(group_cols[1], level)))) %>%
+        mutate(n = n()) %>%   # number of rows in each pair
+        ungroup() %>%
+        filter(n >= num_species)
       
       out <- df2 %>%
+        group_by(across(all_of(group_cols))) %>%
         summarise(
           !!paste0(method, "_avg_ssp126") := mean(ssp126, na.rm = TRUE),
           !!paste0(method, "_avg_ssp585") := mean(ssp585, na.rm = TRUE),
@@ -275,7 +288,7 @@ generate_mcp_averages <- function(df,
 
 # Helper: compile averages across all gap filling combinations into a list
 # that will be used to gap fill NA MCP projections in consumption data
-build_taxa_lookup <- function(df, ecoregion) {
+build_taxa_lookup <- function(df, ecoregion, num_species) {
   tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
 
   # For each taxa in an EEZ, compute the average ssp126 / 585 value for all species within in the taxa
@@ -287,12 +300,14 @@ build_taxa_lookup <- function(df, ecoregion) {
   eez_gapfills_unwgt <- generate_mcp_averages(df = df,
                                               method = "eez",
                                               averaging = "unweighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   eez_gapfills_wgt <- generate_mcp_averages(df = df,
                                               method = "eez",
                                               averaging = "weighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
 
   # ---------------------------------------------------------------------------
   # Realm-level averages
@@ -301,12 +316,14 @@ build_taxa_lookup <- function(df, ecoregion) {
   realm_gapfills_unwgt <- generate_mcp_averages(df = df,
                                               method = "realm",
                                               averaging = "unweighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   realm_gapfills_wgt <- generate_mcp_averages(df = df,
                                               method = "realm",
                                               averaging = "weighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   # ---------------------------------------------------------------------------
   # Region-level averages
@@ -314,12 +331,14 @@ build_taxa_lookup <- function(df, ecoregion) {
   region_gapfills_unwgt <- generate_mcp_averages(df = df,
                                               method = "region",
                                               averaging = "unweighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   region_gapfills_wgt <- generate_mcp_averages(df = df,
                                               method = "region",
                                               averaging = "weighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   # ---------------------------------------------------------------------------
   # Global-level averages
@@ -328,12 +347,14 @@ build_taxa_lookup <- function(df, ecoregion) {
   global_gapfills_unwgt <- generate_mcp_averages(df = df,
                                               method = "global",
                                               averaging = "unweighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   global_gapfills_wgt <- generate_mcp_averages(df = df,
                                               method = "global",
                                               averaging = "weighted",
-                                              ecoregion = ecoregion)
+                                              ecoregion = ecoregion,
+                                              num_species = num_species)
   
   return(list(
     eez_gapfills_unwgt = eez_gapfills_unwgt,
@@ -419,19 +440,27 @@ fill_higher_taxa_helper <- function(df,
 fill_with_higher_taxa <- function(df,
                                   gap_filling_method,
                                   averaging,
-                                  ecoregion) {
+                                  ecoregion,
+                                  num_species) {
   
-  if(!file.exists("../data/exposure/lookup_table.rds")) {
+  if(!file.exists(paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds"))) {
+    
+    # Create directory if doesn't already exist
+    if (!dir.exists(paste0("../data/exposure/lookup_tables/",num_species,"_species/"))) {
+      dir.create(paste0("../data/exposure/lookup_tables/",num_species,"_species/"))
+    }
     
     # Build lookup_table
-    lookup_table <- build_taxa_lookup(df = df, ecoregion = ecoregion)
-    saveRDS(lookup_table, "../data/exposure/lookup_table.rds")
-  
+    lookup_table <- build_taxa_lookup(df = df, ecoregion = ecoregion, num_species = num_species)
+    saveRDS(lookup_table, paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds")) # Save lookup table
+     
   } else {
     
-    lookup_table <- readRDS("../data/exposure/lookup_table.rds")
+    lookup_table <- readRDS(paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds"))
     
   }
+  
+  cat(sprintf("✔️ Lookup table loaded in\n"))
   
   
   # Set taxonomic levels to iterate through
@@ -668,7 +697,7 @@ fill_with_higher_taxa <- function(df,
   return(out_df)
 }
 
-build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption) {
+build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption, num_species) {
   # Load in file names and species names acquired from the sau mcp data
   file_names <- readRDS("../data/exposure/utils/file_names.rds")
   species_names <- readRDS("../data/exposure/utils/species_names.rds")
@@ -933,7 +962,8 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
     x <- fill_with_higher_taxa(df = consumption_mpc,
                                gap_filling_method = gap_filling_method,
                                averaging = averaging,
-                               ecoregion = ecoregion)
+                               ecoregion = ecoregion,
+                               num_species = num_species)
     
     
   }
@@ -962,9 +992,21 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
 # Save interpolated consumption data to csv if gapfilling was done
 if (gap_filling_method != "none") {
   
-  out_path <- paste0("../output/future_catch_joined_consumption/interpolated_future_data_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet")
-  write_parquet(interpolated, out_path)
   
+  if (!file.exists(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/consumption_projections_gap_filled_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet"))) {
+    
+    # Create directory if doesn't already exist
+    if (!dir.exists(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/"))) {
+      
+      dir.create(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/"))
+      
+    }
+    
+    out_path <- paste0("../output/consumption_projections_gap_filled/", num_species, "_species/consumption_projections_gap_filled_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet")
+  write_parquet(interpolated, out_path)
+    
+  }
+
 }
   
   # Pivot to longer
@@ -1183,14 +1225,16 @@ build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfoli
                               dir,
                               gap_filling_method = c("none", "region", "realm", "thorough", "hierarchical", "diagonal"),
                               averaging = c("unweighted", "weighted", "none"),
-                              consumption) {
+                              consumption,
+                              num_species) {
   
   gap_filling_method <- match.arg(gap_filling_method)
   averaging <- match.arg(averaging)
   portfolio <- match.arg(portfolio)
   cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
+  cat(sprintf("%s gap filling, %s averaging; %d minimum species\n", gap_filling_method, averaging, num_species))
 
-  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method, averaging = averaging, consumption = consumption)
+  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method, averaging = averaging, consumption = consumption, num_species = num_species)
   sensitivity  <- build_sensitivity(dir)
 
   consuming_countries <- exposure %>% distinct(consumer_iso3c) %>% pull()
@@ -1200,10 +1244,17 @@ build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfoli
     right_join(sensitivity,  by = c("consumer_iso3c" = "iso3c")) %>%
     left_join(exposure,      by = "consumer_iso3c")
   
+  # Create directory if doesn't already exist
+  if (!dir.exists(paste0("../output/e_s_ac/", num_species, "_species/"))) {
+    
+    dir.create(paste0("../output/e_s_ac/", num_species, "_species/"))
+    
+  }
+  
   if (gap_filling_method == "none") {
-    out_path <- paste0("../output/e_s_ac/e_s_ac_", portfolio, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
+    out_path <- paste0("../output/e_s_ac/", num_species, "_species/e_s_ac_", portfolio, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
   } else {
-    out_path <- paste0("../output/e_s_ac/e_s_ac_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
+    out_path <- paste0("../output/e_s_ac/",num_species,"_species/e_s_ac_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
   }
 
   

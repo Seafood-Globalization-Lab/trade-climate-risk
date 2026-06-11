@@ -24,6 +24,10 @@ library(tidytext)
 library(ggsankey)
 library(exploreARTIS)
 library(gtools)
+library(rstan)
+
+# Set working directory for pulling in data easily path here
+setwd("C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/code")
 ```
 
 
@@ -96,7 +100,9 @@ for (i in c("Africa", "North America", "South America", "Europe", "Oceania")) {
 theme_reliance <- function(base_size = 8,
                            axis_title_x = TRUE,
                            axis_title_y = FALSE,
-                           legend       = TRUE) {
+                           legend       = TRUE,
+                           bold = TRUE,
+                           rotate = TRUE) {
   base <- theme_minimal(base_size = base_size) +
     theme(
       text                    = element_text(family = "sans"),
@@ -111,14 +117,13 @@ theme_reliance <- function(base_size = 8,
         color     = scales::alpha("black", 0.25),
         linewidth = 0.3
       ),
-      axis.text               = element_text(size = base_size - 3),   # 5 pt
+      axis.text               = element_text(size = base_size - 3, angle = if (rotate) 45 else 0),   # 5 pt
       axis.title.x            = element_text(
         size  = base_size,
-        face  = "bold",
+        face  = if (bold) "bold" else "plain",
         vjust = -0.5,
         margin = margin(t = 4)
-      ),
-      axis.title.y            = element_blank(),
+      ),          
       strip.text              = element_text(size = base_size - 1, face = "bold"),
       legend.position         = if (legend) "bottom" else "none",
       legend.title            = element_text(size = base_size - 1, face = "bold"),
@@ -137,137 +142,233 @@ theme_reliance <- function(base_size = 8,
     base <- base + theme(axis.title.x = element_blank())
   }
 
+  if (!axis_title_y) {
+    base <- base + theme(axis.title.y = element_blank())
+  }
+
   base
 }
 
-exposed_foods <- read_parquet("../output/future_catch_joined_consumption/interpolated_future_data_total_portfolio_weighted_diagonal_gapfill.parquet")
+  exposed_foods <- read_parquet("../output/consumption_projections_gap_filled/2_species/consumption_projections_gap_filled_total_portfolio_weighted_diagonal_gapfill.parquet")
 
-plot_viz <- function(data) {
+  plot_viz <- function(data) {
   x <- data %>%
-    ggplot(aes(x = pct_contribution, y = consumer_iso3c, color = consumption_type)) +
+    ggplot(aes(x = pct_contribution, y = consumer_iso3c, fill = consumption_type)) +
   # overall country change
-  geom_point(
-    aes(x = pct_change, y = consumer_iso3c),
-    inherit.aes = FALSE,
-    color = "black",
-    fill = "white",
-    shape = 21,
-    stroke = 1.2,
-    size = 3.8
-  ) +
   # contribution points
-  geom_point(size = 2.5,
-             alpha = 0.8,
-             position = position_jitter(height = 0.08)) +
+  geom_col(alpha = 0.8) +
   geom_vline(
     xintercept = 0,
     linetype = "dashed",
     color = "grey50",
     linewidth = 0.4
   ) +
+    geom_point(
+    aes(x = pct_change, y = consumer_iso3c),
+    shape  = 21,
+    fill   = "grey20",
+    color  = "white",
+    size   = 1.2,
+    stroke = 0.3
+  ) +
   facet_wrap(~ region, scales = "free_y") +
-  labs(x = "Contribution to total percent change", y = NULL, color = "Consumption type") +
+  labs(x = "Contribution to total % change in consumption", y = NULL, fill = "Consumption type") +
   theme_minimal(base_size = 11) +
   theme(
     panel.grid.major.y = element_blank(),
     panel.grid.minor = element_blank(),
     strip.text = element_text(face = "bold"),
     legend.position = "bottom",
-    axis.text = element_text(size = 5.5)
+    axis.text = element_text(size = 4)
   ) +
   scale_color_manual(values = c("#1f77b4","#ff7f0e"))
   
   return(x)
 }
 
+library(ggplot2)
+library(cowplot)
+library(dplyr)
+library(forcats)
+library(scales)
+
+# ── Unified colour palette ─────────────────────────────────────────────────────
+col_domestic  <- "#1f77b4"
+col_foreign   <- "#ff7f0e"
+col_increase  <- "#2166AC"
+col_decrease  <- "#B2182B"
+
+# ── Data prep ─────────────────────────────────────────────────────────────────
 plot_data <- exposed_foods %>%
   select(-ssp585, -cv_ssp585) %>%
-  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
-  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
-  
+  mutate(future_change_catch = 1 + (ssp126 / 100),
+         change_in_stock     = live_weight_t * future_change_catch) %>%
   group_by(consumer_iso3c, consumption_type) %>%
   summarise(
     change_in_stock = sum(change_in_stock, na.rm = TRUE),
-    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t,   na.rm = TRUE),
     .groups = "drop"
   ) %>%
   group_by(consumer_iso3c) %>%
-  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
-  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t)) %>%
+  mutate(
+    pct_change       = 100 * (change_in_stock - live_weight_t) / live_weight_t,
+    pct_contribution = pct_change * live_weight_t / sum(live_weight_t)
+  ) %>%
   add_region("consumer_iso3c", "region") %>%
   filter(consumer_iso3c != "NEI") %>%
-  mutate(pct_change = sum(pct_contribution)) %>%
-  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  mutate(
+    pct_change       = sum(pct_contribution),
+    prop_consumption = live_weight_t / sum(live_weight_t)
+  ) %>%
   ungroup() %>%
-  mutate(consumer_iso3c = fct_reorder(consumer_iso3c, -pct_change))
-
-top_panel <- plot_data %>%
-  distinct(consumer_iso3c, pct_change) %>%
-  count(condition = pct_change > 0) %>%
-  ggplot(aes(y = "", x = n, fill = condition)) +
-  geom_col(position = "stack") +
-  scale_fill_manual(values = c(`FALSE` = "#B2182B", `TRUE` = "#2166AC"),
-                    labels = c(`FALSE` = "Decrease in catch", `TRUE` = "Increase in catch")) +
-  theme_reliance() +
-  theme(
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank(),
-    axis.title.x = element_text(size = 6, face = "bold"),
-    panel.grid.major.y = element_blank(),
-    aspect.ratio = 0.05,
-    legend.title = element_blank()
+  mutate(
+    consumer_iso3c = fct_reorder(consumer_iso3c, -pct_change),
+    consumption_type = factor(consumption_type, levels = c("foreign", "domestic"))
   )
 
+# ── Panel A: proportion of countries with increase vs decrease ─────────────────
+panel_a <- plot_data %>%
+  distinct(consumer_iso3c, pct_change) %>%
+  count(condition = pct_change > 0) %>%
+  mutate(fill_label = ifelse(condition, "Increase in catch", "Decrease in catch"),
+         fill_label = factor(fill_label, levels = c("Increase in catch", "Decrease in catch"))) %>%
+  ggplot(aes(y = "", x = n, fill = fill_label)) +
+  geom_col(position = "fill") +
+  scale_x_continuous(labels = percent_format()) +
+  scale_fill_manual(
+    values = c("Increase in catch" = col_increase, "Decrease in catch" = col_decrease),
+    name   = NULL
+  ) +
+  guides(fill = guide_legend(nrow = 1)) +
+  theme_reliance() +
+  theme(
+    axis.text.y        = element_blank(),
+    axis.ticks.y       = element_blank(),
+    axis.title.x       = element_text(size = 6, face = "bold"),
+    panel.grid.major.y = element_blank(),
+    aspect.ratio       = 0.08,
+    legend.position    = "bottom",
+    legend.text        = element_text(size = 7),
+    legend.key.size    = unit(0.35, "cm")
+  ) +
+  labs(x = "Percentage of countries", y = NULL)
 
+# ── Panel B: proportion of countries with domestic / foreign dominant consumption ──────────────────────────────
+panel_b <- plot_data %>%
+    filter(consumer_iso3c %in% both_forgn_dom,
+           consumption_type == "domestic") %>%
+    mutate(condition = prop_consumption > 0.5) %>%
+    count(condition) %>%
+    ggplot(aes(y = "", x = n, fill = condition)) +
+    geom_col(position = "fill") +
+    scale_x_continuous(labels = scales::percent_format(), expand = c(0, 0)) +
+    scale_fill_manual element_blank(),
+      axis.text.y        = element_blank(),
+      axis.ticks.y       =(
+      values = c(`FALSE` = col_foreign, `TRUE` = col_domestic),
+      labels = c(`FALSE` = "Foreign dominant consumption", `TRUE` = "Domestic dominant consumption"),
+      na.translate = FALSE
+    ) +
+    theme_reliance() +
+    theme(
+      legend.title       = element_blank(),
+      axis.title.x       = element_text(size = 6, face = "bold"),
+      panel.grid.major.y = element_blank(),
+      aspect.ratio       = 0.12
+    ) +
+    labs(x = "Percentage of countries", y = NULL)
 
+# ── Panel C: violin + jitter of pct_contribution ──────────────────────────────
+panel_c <- plot_data %>%
+  ggplot(aes(y = consumption_type, x = pct_contribution, color = consumption_type)) +
+  geom_violin(alpha = 0.5) +
+  geom_jitter(alpha = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_color_manual(
+    values = c(foreign = col_foreign, domestic = col_domestic),
+    name   = NULL
+  ) +
+  guides(color = "none") +
+  theme_reliance(bold = FALSE) +
+  labs(x = "Contribution to total % change in consumption", y = NULL)
+
+# ── Panel D: regional plots ────────────────────────────────────────────────────
 p_top <- plot_data %>%
   filter(region %in% c("Africa", "Asia", "Europe")) %>%
   plot_viz() +
-  guides(color = "none") +
-  theme_reliance() +
-  theme(axis.title.x = element_blank()) 
+  scale_fill_manual(values = c(col_foreign, col_domestic)) +
+  guides(fill = "none") +
+  theme(legend.title       = element_blank(),
+      axis.title.x       = element_text(size = 6, face = "bold"),
+      panel.grid.major.y = element_blank()) +
+        labs(y = "Country")
 
-p_bottom <- plot_data %>%
+p_bottom_inner <- plot_data %>%
   filter(!region %in% c("Africa", "Asia", "Europe")) %>%
   plot_viz() +
-  theme_reliance()
+  scale_fill_manual(values = c(col_foreign, col_domestic)) +
+  theme(
+      panel.grid.major.y = element_blank()
+    ) +
+      labs(y = "Country")
 
-bottom_row_narrowed <- cowplot::plot_grid(
-  NULL, p_bottom, NULL,
-  ncol       = 3,
-  rel_widths = c(0.1, 0.75, 0.1)
+p_bottom <- plot_grid(NULL, p_bottom_inner, NULL,
+                      ncol = 3, rel_widths = c(0.1, 0.75, 0.1))
+
+panel_d <- plot_grid(p_top, p_bottom, nrow = 2, rel_heights = c(1.25, 1))
+
+# ── Assemble ──────────────────────────────────────────────────────────────────
+final_plot <- plot_grid(
+  plot_grid(panel_a, panel_b, ncol = 2, align = "h",
+  labels = c("A","B"), label_size  = 9.5),
+  panel_c,
+  panel_d,
+  nrow        = 3,
+  rel_heights = c(0.35, 0.45, 2),
+  labels      = c("","C","D"),
+  label_size  = 9.5
 )
 
-bottom_panel <- plot_grid(p_top,bottom_row_narrowed, nrow = 2, rel_heights = c(1.25,1))
-
-plot <- cowplot::plot_grid(
-  top_panel,
-  bottom_panel,
-  nrow          = 2,
-  rel_heights   = c(0.35, 2),
-  labels        = c("A", "B"),
-  label_size    = 9.5
+# ── Save ──────────────────────────────────────────────────────────────────────
+ggsave(
+  "../images/exploratory/regional_contribution.jpg",
+  plot   = final_plot,
+  device = "jpg",
+  width  = 7,
+  height = 8,
+  dpi    = 300
 )
-
-# Save plot
-ggsave("../images/exploratory/regional_contribution.jpg", plot = plot, device = "jpg", width = 8, height = 6, dpi = 300)
 ```
 
+# Are domestic or foreign foods the most exposed?
 
 ```{r}
-plot_data %>%
-  ggplot(aes(y = consumption_type, x = pct_contribution, color = consumption_type)) +
-  geom_violin() +
-  theme_reliance() +
-  geom_jitter(alpha = 0.3) +
-  labs(x ="Contribution to percent change in aquatic food consumption", color = "Consumption source")
-
-plot_data %>%
-  ggplot(aes(x = pct_contribution, y = consumer_iso3c, color = consumption_type)) +
-  geom_point() +
-  theme_reliance() +
-  theme(axis.text.y = element_blank()) +
-  labs(x ="Contribution to percent change in aquatic food consumption", color = "Consumption source")
+plot_data <- exposed_foods %>%
+  select(-ssp585, -cv_ssp585) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100),
+         change_in_stock     = live_weight_t * future_change_catch) %>%
+  group_by(consumer_iso3c, consumption_type) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t,   na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(
+    pct_change       = 100 * (change_in_stock - live_weight_t) / live_weight_t,
+    pct_contribution = pct_change * live_weight_t / sum(live_weight_t)
+  ) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  mutate(
+    pct_change       = sum(pct_contribution),
+    prop_consumption = live_weight_t / sum(live_weight_t)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    consumer_iso3c = fct_reorder(consumer_iso3c, -pct_change),
+    consumption_type = factor(consumption_type, levels = c("foreign", "domestic"))
+  )
 
 x <- plot_data %>%
   filter(consumption_type == "domestic") %>%
@@ -276,12 +377,11 @@ x <- plot_data %>%
 y <- plot_data %>%
   filter(consumption_type == "foreign") %>%
   pull(pct_contribution)
-  
 
 t.test(x,y, alternative = "less")
 ```
 
-## Look within regions
+## Look at domestic / foreign exposure within regions
 
 ```{r}
 theme_si <- function(base_size = 8,
@@ -329,86 +429,170 @@ theme_si <- function(base_size = 8,
   base
 }
 
+library(ggplot2)
+library(cowplot)
+library(dplyr)
+library(forcats)
+library(countrycode)
+library(purrr)
+
+# ── Unified colour palette ─────────────────────────────────────────────────────
+col_domestic  <- "#1f77b4"
+col_foreign   <- "#ff7f0e"
+col_increase  <- "#2166AC"
+col_decrease  <- "#B2182B"
 
 regions <- c("Asia", "Africa", "Europe", "North America", "South America", "Oceania")
-for (i in regions) {
-  
-  p1 <- plot_data %>%
-  filter(region == i) %>%
-  distinct(consumer_iso3c, pct_change) %>%
-  count(condition = pct_change > 0) %>%
-  ggplot(aes(y = "", x = n, fill = condition)) +
-  geom_col(position = "stack") +
-  scale_fill_manual(values = c(`FALSE` = "#B2182B", `TRUE` = "#2166AC"),
-                    labels = c(`FALSE` = "Decrease in catch", `TRUE` = "Increase in catch")) +
-  theme_reliance() +
-  theme(
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank(),
-    axis.title.x = element_text(size = 6, face = "bold"),
-    panel.grid.major.y = element_blank(),
-    aspect.ratio = 0.05,
-    legend.title = element_blank()
-  ) +
-    labs(x = "Number of countries")
 
+# ── Helper: build one region plot ─────────────────────────────────────────────
+make_region_plot <- function(data, region_name) {
 
-both_forgn_dom <- plot_data %>%
-  filter(region == i) %>%
-  count(consumer_iso3c) %>%
-  filter(n == 2) %>%
-  pull(consumer_iso3c)
+  d <- data %>%
+    filter(region == region_name) %>%
+    mutate(
+      consumer_label = countrycode(consumer_iso3c, "iso3c", "country.name"),
+      consumption_type = factor(consumption_type, levels = c("foreign", "domestic"))
+    )
 
-p2 <- plot_data %>%
-  filter(region == i,
-         consumer_iso3c %in% both_forgn_dom) %>%
-  group_by(consumer_iso3c) %>%
-  mutate(condition = prop_consumption == max(prop_consumption)) %>%
-  ungroup() %>%
-  count(consumption_type, condition) %>%
-  filter(consumption_type == "domestic") %>%
-  ggplot(aes(y = "", x = n, fill = condition)) +
-  geom_col(position = "stack") +
-  scale_fill_manual(values = c(`FALSE` = "#ff7f0e", `TRUE` = "#1f77b4"),
-                    labels = c(`FALSE` = "Foreign dominant", `TRUE` = "Domestic dominant")) +
-  theme_reliance() +
-  theme_reliance() +
-  theme(
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank(),
-    axis.title.x = element_text(size = 6, face = "bold"),
-    panel.grid.major.y = element_blank(),
-    aspect.ratio = 0.05,
-    legend.title = element_blank()
-  ) +
-  labs(x = "Number of countries")
+  # ── p1: direction of change (proportional) ──────────────────────────────────
+  p1 <- d %>%
+    distinct(consumer_iso3c, pct_change) %>%
+    count(condition = pct_change > 0) %>%
+    ggplot(aes(y = "", x = n, fill = condition)) +
+    geom_col(position = "fill") +
+    scale_x_continuous(labels = scales::percent_format(), expand = c(0, 0)) +
+    scale_fill_manual(
+      values = c(`TRUE` = col_increase, `FALSE` = col_decrease),
+      labels = c(`TRUE` = "Increase in catch", `FALSE` = "Decrease in catch"),
+      na.translate = FALSE
+    ) +
+    theme_reliance() +
+    theme(
+      legend.title       = element_blank(),
+      axis.text.y        = element_blank(),
+      axis.ticks.y       = element_blank(),
+      axis.title.x       = element_text(size = 6, face = "bold"),
+      panel.grid.major.y = element_blank(),
+      aspect.ratio       = 0.12
+    ) +
+    labs(x = "Percentage of countries", y = NULL)
 
-bottom_panel <- plot_data %>%
-  filter(region == i) %>%
-  plot_viz() +
-  theme(strip.text = element_blank())
+  # ── p2: domestic vs foreign dominance (proportional) ────────────────────────
+  both_forgn_dom <- d %>%
+    count(consumer_iso3c) %>%
+    filter(n == 2) %>%
+    pull(consumer_iso3c)
 
-top_panel <- plot_grid(p1,p2)
+  p2 <- d %>%
+    filter(consumer_iso3c %in% both_forgn_dom,
+           consumption_type == "domestic") %>%
+    mutate(condition = prop_consumption > 0.5) %>%
+    count(condition) %>%
+    ggplot(aes(y = "", x = n, fill = condition)) +
+    geom_col(position = "fill") +
+    scale_x_continuous(labels = scales::percent_format(), expand = c(0, 0)) +
+    scale_fill_manual(
+      values = c(`FALSE` = col_foreign, `TRUE` = col_domestic),
+      labels = c(`FALSE` = "Foreign dominant consumption", `TRUE` = "Domestic dominant consumption"),
+      na.translate = FALSE
+    ) +
+    theme_reliance() +
+    theme(
+      legend.title       = element_blank(),
+      axis.text.y        = element_blank(),
+      axis.ticks.y       = element_blank(),
+      axis.title.x       = element_text(size = 6, face = "bold"),
+      panel.grid.major.y = element_blank(),
+      aspect.ratio       = 0.12
+    ) +
+    labs(x = "Percentage of countries", y = NULL)
 
+  # ── Shared legend (harvested from a temporary plot) ──────────────────────────
+  legend_source <- bind_rows(
+    tibble(label = "Increase in catch",   fill = col_increase,  group = "Direction"),
+    tibble(label = "Decrease in catch",   fill = col_decrease,  group = "Direction"),
+    tibble(label = "Domestic dominant",   fill = col_domestic,  group = "Source"),
+    tibble(label = "Foreign dominant",    fill = col_foreign,   group = "Source")
+  )
+
+  shared_legend <- get_legend(
+    ggplot(legend_source, aes(x = label, fill = label)) +
+      geom_col(aes(y = 1)) +
+      scale_fill_manual(values = setNames(legend_source$fill, legend_source$label),
+                        name = NULL) +
+      guides(fill = guide_legend(nrow = 2)) +
+      theme_void() +
+      theme(legend.position = "bottom",
+            legend.text     = element_text(size = 7),
+            legend.key.size = unit(0.35, "cm"))
+  )
+
+  top_panel <- plot_grid(
+    plot_grid(p1, p2, ncol = 2, align = "h"),
+    shared_legend,
+    nrow = 2,
+    rel_heights = c(1, 0.35)
+  )
+
+  # ── Middle panel: proportion by country (no x-axis text — shared with bottom) 
+  middle_panel <- d %>%
+    ggplot() +
+    geom_col(aes(x = fct_reorder(consumer_iso3c, pct_change),
+                 y = prop_consumption * 100,
+                 fill = consumption_type)) +
+    scale_fill_manual(values = c(col_foreign, col_domestic)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme_reliance(axis_title_y = TRUE, axis_title_x = FALSE, legend = FALSE, rotate = FALSE) +
+    theme(
+      axis.ticks.x = element_blank(),
+      axis.text.x = element_text(size = 3)
+    ) +
+    labs(y = "Percentage of consumption", x = NULL)
+
+  # ── Bottom panel ─────────────────────────────────────────────────────────────
+  bottom_panel <- d %>%
+    mutate(consumption_type = factor(consumption_type, levels = c("domestic", "foreign"))) %>%
+    plot_viz() +
+    labs(y = "Country") +
+    theme(strip.text = element_blank()) +
+    scale_fill_manual(values = c(col_domestic, col_foreign)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6))
+
+  # ── Title ────────────────────────────────────────────────────────────────────
   title_panel <- ggplot() +
-    labs(title = i) +
+    labs(title = region_name) +
     theme_void() +
     theme(
-      plot.title = element_text(
-        hjust = 0.5, face = "bold", size = 11
-      ),
-      plot.margin = margin(15, 0, -5, 0),
-      panel.spacing = unit(0, "pt")
+      plot.title  = element_text(hjust = 0.5, face = "bold", size = 12),
+      plot.margin = margin(15, 0, -5, 0)
     )
-  
 
-(final_plot <- plot_grid(title_panel, top_panel, bottom_panel,
-                        nrow = 3,
-                        rel_heights = c(0.005,0.1,0.45)))
-
-ggsave(paste0("../images/exploratory/contribution_",i,".jpg"), plot = final_plot, device = "jpg", width = 5, height = 7, dpi = 300)
-  
+  # ── Assemble ─────────────────────────────────────────────────────────────────
+  plot_grid(
+    title_panel,
+    top_panel,
+    middle_panel,
+    bottom_panel,
+    nrow        = 4,
+    align       = "v",
+    axis        = "lr",
+    rel_heights = c(0.07, 0.22, 0.33, 1.0)
+  )
 }
+
+# ── Render & save all regions ─────────────────────────────────────────────────
+walk(regions, function(r) {
+  p <- make_region_plot(plot_data, r)
+  ggsave(
+    filename = paste0("../images/exploratory/contribution_", r, ".jpg"),
+    plot     = p,
+    device   = "jpg",
+    width    = 7,       # double-column width
+    height   = 9,
+    dpi      = 300
+  )
+  message("Saved: ", r)
+})
 ```
 
 # Taxa contribution to climate vulnerability
@@ -540,6 +724,7 @@ for (i in c("Foreign, not exposed",
 
 ```{r}
 exposure <- exposed_foods %>%
+  filter(gapfill_method == "Gapfill not needed") %>%
   mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
   group_by(consumer_iso3c) %>%
@@ -552,9 +737,8 @@ exposure <- exposed_foods %>%
   mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) /
            ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
            exposure = -exposure + 1) %>%
-  select(consumer_iso3c, exposure)
+  select(consumer_iso3c, pct_change)
 
-# By exposed / not exposed
 shannon <- exposed_foods %>%
   group_by(consumer_iso3c, sciname) %>%
   summarize(sciname_total = sum(live_weight_t)) %>%
@@ -568,15 +752,328 @@ shannon <- exposed_foods %>%
   filter(consumer_iso3c != "NEI") %>%
   group_by(consumer_iso3c)
 
-exposure %>%
-  left_join(shannon, by = "consumer_iso3c") %>%
-  ggplot(aes(x = shannon, y = exposure)) +
-  geom_point() +
-  facet_wrap(~ region)
+test_delete <- exposure %>%
+  left_join(shannon)
 
-  
+test_delete %>%
+  ggplot(aes(x = shannon, y = pct_change)) +
+  geom_point() +
+  theme_reliance(bold = FALSE, axis_title_y = TRUE) +
+  labs(x = "Shannon diversity", y = "% change in portfolio")
 ```
 
+```{r}
+
+exposed_foods <- read_parquet("../output/consumption_projections_gap_filled/2_species/consumption_projections_gap_filled_total_portfolio_weighted_diagonal_gapfill.parquet")
+
+# exposure <- exposed_foods %>%
+#   filter(gapfill_method == "Gapfill not needed") %>%
+#   mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+#   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+#   group_by(consumer_iso3c) %>%
+#   summarise(
+#     change_in_stock = sum(change_in_stock, na.rm = TRUE),
+#     live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+#   mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) /
+#            ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
+#            exposure = -exposure + 1) %>%
+#   select(consumer_iso3c, exposure)
+
+
+
+exposure_eez <- exposed_foods %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  # filter(gapfill_method == "Gapfill not needed") %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(eez_iso3c) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) /
+           ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
+           exposure = -exposure + 1) %>%
+  select(eez_iso3c, exposure)
+
+# By exposed / not exposed
+shannon <- exposed_foods %>%
+  group_by(eez_iso3c, sciname) %>%
+  summarize(sciname_total = sum(live_weight_t)) %>%
+  group_by(eez_iso3c) %>%
+  mutate(genus_total_country = sum(sciname_total)) %>%
+  ungroup() %>%
+  mutate(pi = sciname_total / genus_total_country, pi_lnpi = pi * log(pi)) %>%
+  group_by(eez_iso3c) %>%
+  summarize(shannon = -sum(pi_lnpi)) %>%
+  add_region("eez_iso3c", "region") %>%
+  filter(eez_iso3c != "NEI") %>%
+  group_by(eez_iso3c)
+
+exposure_eez <- exposed_foods %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  # filter(gapfill_method == "Gapfill not needed") %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(eez_iso3c) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) /
+           ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
+           exposure = -exposure + 1) %>%
+  select(eez_iso3c, exposure)
+
+# Shannon by eez, consumption_type
+shannon <- exposed_foods %>%
+  mutate(food_is_exposed = case_when(
+    ssp126 > 0 ~ FALSE,
+    ssp126 < 0 ~ TRUE
+  )) %>%
+  group_by(consumer_iso3c, sciname, food_is_exposed, consumption_type) %>%
+  summarize(sciname_total = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c, food_is_exposed, consumption_type) %>%
+  mutate(genus_total_country = sum(sciname_total)) %>%
+  ungroup() %>%
+  mutate(pi = sciname_total / genus_total_country, pi_lnpi = pi * log(pi)) %>%
+  group_by(consumer_iso3c, food_is_exposed, consumption_type) %>%
+  summarize(shannon = -sum(pi_lnpi)) %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  group_by(consumer_iso3c)
+
+# Exposure contribution 
+contrib_to_exposure_eez <- exposed_foods %>%
+  mutate(food_is_exposed = case_when(
+    ssp126 > 0 ~ FALSE,
+    ssp126 < 0 ~ TRUE
+  )) %>%
+  mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
+  # filter(gapfill_method == "Gapfill not needed") %>%
+  mutate(change_in_stock = live_weight_t * future_change_catch) %>%
+  group_by(consumer_iso3c, food_is_exposed, consumption_type) %>%
+  summarise(
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t)) %>%
+  mutate(pct_change = sum(pct_contribution))
+
+######################################################
+
+test_df <- contrib_to_exposure_eez %>%
+  drop_na() %>%
+  left_join(shannon, by = c("consumer_iso3c", "food_is_exposed", "consumption_type")) %>%
+  mutate(food_is_exposed = case_when(
+    food_is_exposed == TRUE ~ "Foods with projected declines",
+    food_is_exposed == FALSE ~ "Foods with projected increases",
+  )) %>%
+    filter(consumer_iso3c != "NEI") %>%
+  ungroup %>%
+  mutate(exposure = (pct_change - min(pct_change, na.rm = TRUE) ) / ( max(pct_change, na.rm = TRUE) - min(pct_change, na.rm = TRUE) ),
+           exposure = -exposure + 1)
+
+  test_df %>%
+    filter(!(consumption_type == "foreign" & food_is_exposed == "Foods with projected declines")) %>%
+      ggplot(aes(x = shannon, y = prop_consumption, color = consumption_type)) +
+      geom_point() +
+      geom_smooth(method = "lm", alpha = 0.15) +
+      facet_wrap(~ food_is_exposed) +
+      scale_color_manual(values = c("#1f77b4", "#ff7f0e")) +
+      theme_reliance(axis_title_y = TRUE, bold = FALSE) +
+      labs(x = "Shannon diversity", y = "Proportion of consumption")
+
+test_df %>%
+  ggplot(aes(x = shannon, y = pct_change, color = consumption_type)) +
+  geom_point() +
+  facet_wrap(~ food_is_exposed) +
+  geom_smooth(method = "lm", alpha = 0.15) +
+  theme_reliance(axis_title_y = TRUE, bold = FALSE) +
+  labs(x = "Shannon diversity", y = "% change in portfolio") +
+  scale_color_manual(values = c("#1f77b4", "#ff7f0e"))
+
+x <- test_df %>%
+  filter(food_is_exposed == "Foods with projected declines",
+  consumption_type == "foreign") %>%
+    select(consumer_iso3c, pct_change, V1 = shannon) %>%
+    left_join(test_df %>%
+  filter(food_is_exposed == "Foods with projected increases",
+  consumption_type == "foreign") %>%
+    select(consumer_iso3c, V2 = shannon), by = "consumer_iso3c") %>%
+    left_join(test_df %>%
+  filter(food_is_exposed == "Foods with projected declines",
+  consumption_type == "domestic") %>%
+    select(consumer_iso3c, V3 = shannon), by = "consumer_iso3c") %>%
+    left_join(test_df %>%
+  filter(food_is_exposed == "Foods with projected increases",
+  consumption_type == "domestic") %>%
+    select(consumer_iso3c, V4 = shannon), by = "consumer_iso3c")
+
+lm(pct_change ~ V1 + V2 + V3 + V4,data = x) %>% summary()
+
+df1 <- test_df %>%
+  filter(food_is_exposed == "Foods with projected declines",
+  consumption_type == "foreign") %>%
+    select(consumer_iso3c, prop_consumption, shannon, pct_change, exposure) %>%
+    exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region")
+
+df2 <- test_df %>%
+  filter(food_is_exposed == "Foods with projected increases",
+  consumption_type == "foreign") %>%
+    select(consumer_iso3c, prop_consumption, shannon, pct_change, exposure) %>%
+    exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region") 
+
+df3 <- test_df %>%
+  filter(food_is_exposed == "Foods with projected declines",
+  consumption_type == "domestic") %>%
+    select(consumer_iso3c, prop_consumption, shannon, pct_change, exposure) %>%
+    exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region")
+
+df4 <- test_df %>%
+  filter(food_is_exposed == "Foods with projected increases",
+  consumption_type == "domestic") %>%
+    select(consumer_iso3c, prop_consumption, shannon, pct_change) %>%
+    exploreARTIS::add_region(col = "consumer_iso3c", region.col.name = "region") 
+   
+
+lm(prop_consumption ~ shannon, data = df1) %>% summary()
+lm(prop_consumption ~ shannon, data = df2) %>% summary()
+lm(prop_consumption ~ shannon, data = df3) %>% summary()
+lm(prop_consumption ~ shannon, data = df4) %>% summary()
+
+# create_map(data = df1, fill = "shannon", country.col.name = "consumer_iso3c")
+# create_map(data = df2, fill = "shannon", country.col.name = "consumer_iso3c")
+# create_map(data = df3, fill = "shannon", country.col.name = "consumer_iso3c")
+# create_map(data = df4, fill = "shannon", country.col.name = "consumer_iso3c")
+
+```
+
+## Bayesian Model
+
+```{r hierarchical bayesian model}
+dfs <- list(df1, df2, df3, df4)
+for (i in seq_along(dfs)) {
+  # Input data (region)
+    region <- dfs[[i]]$region %>% factor() %>% as.integer()
+
+    num_regions <- region %>% unique() %>% length()
+    
+    # Response — z-scored
+    y <- scale(dfs[[i]] %>% pull(prop_consumption))[, 1]
+
+    # Stan data
+    stan_data <- list(
+      N                = length(region),
+      y                = y,
+      region           = region,
+      num_regions      = num_regions
+    )
+
+    # Initial values matching Stan model parameters
+    inits <- function() {
+      list(
+        mu_region    = rep(0, 6),
+        sigma        = 1
+      )
+    }
+
+    # Fit Stan model
+    fit <- stan(
+      file   = "../utils/shannon_bayesian.stan",
+      data   = stan_data,
+      init   = inits,
+      chains = 3,
+      iter   = 4000,
+      warmup = 1000
+    )
+    
+mcmc_output <- extract(fit, permuted = T)
+
+# Get regions names via facator level
+
+# Convert factor levels back into country names
+region_factor_numeric <- df1$region %>% factor() %>% as.integer()
+
+region_names_ordered <- df1 %>%
+  mutate(factor_level = region_factor_numeric) %>%
+  distinct(region, factor_level) %>%
+  arrange(factor_level) %>%
+  pull(region)
+
+colnames(mcmc_output$mu_region) <- region_names_ordered
+
+# Interval colours — three lightness steps per model colour
+if (i %in% c(1,3)) {
+  color = "red"
+} else {
+  color = "blue"
+}
+col_95 <- colorspace::lighten(color, 0.65)
+col_80 <- colorspace::lighten(color, 0.35)
+col_50 <- colorspace::lighten(color, 0.05)
+
+plot <- data.frame(mcmc_output$mu_region) %>%
+  pivot_longer(cols = everything()) %>%
+  group_by(name) %>%
+  summarise(
+      lo95 = quantile(value, 0.025),
+      lo80 = quantile(value, 0.10),
+      lo50 = quantile(value, 0.25),
+      med  = quantile(value, 0.50),
+      hi50 = quantile(value, 0.75),
+      hi80 = quantile(value, 0.90),
+      hi95 = quantile(value, 0.975),
+      .groups = "drop"
+    ) %>%
+  ggplot(aes(y = name)) +
+  geom_segment(aes(x = lo95, xend = hi95),
+               color = col_95, linewidth = 2.2, lineend = "butt", alpha = 1) +
+    geom_segment(aes(x = lo80, xend = hi80),
+                 color = col_80, linewidth = 2.2, lineend = "butt", alpha = 1) +
+    geom_segment(aes(x = lo50, xend = hi50),
+                 color = col_50, linewidth = 2.2, lineend = "butt", alpha = 1) +
+    geom_point(aes(x = med), shape = 21, size = 1.6,
+               fill = "white", color = "grey20", stroke = 0.4) +
+
+    geom_vline(xintercept = 0, linetype = "dashed",
+               linewidth = 0.35, color = "grey40") +
+    scale_color_identity() +
+    # scale_x_continuous(limits = c(-x_limit, x_limit)) +
+    # scale_y_discrete(labels = var_labels) +
+    # labs(title = title) +
+    theme_minimal(base_size = 8) +
+    theme(
+      plot.title         = element_text(size = 3.5, face = "bold", hjust = 0.5,
+                                        margin = margin(b = 2)),
+      plot.tag           = element_text(size = 7, face = "bold"),
+      # plot.tag.position  = tag_pos,
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      panel.grid.major.x = element_line(
+        color = scales::alpha("black", 0.12), linewidth = 0.3
+      ),
+      axis.text.x        = element_text(size = 5.5, color = "black"),
+      axis.title         = element_blank(),
+      plot.margin        = margin(4, 6, 4, 6)
+      # axis.text.y        = element_blank(),
+      # axis.ticks.y       = element_blank()
+    )
+
+print(plot)
+
+}   
+df1
+```
 
 ## Is the level of exposure related to the diversity of marine taxa consumption?
 
@@ -587,7 +1084,7 @@ shannon_exp <- exposed_foods %>%
   mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
   
-  group_by(consumer_iso3c) %>%
+  group_by(eez_iso3c_iso3c) %>%
   summarise(
     change_in_stock = sum(change_in_stock, na.rm = TRUE),
     live_weight_t   = sum(live_weight_t, na.rm = TRUE),
@@ -611,8 +1108,6 @@ shannon_exp %>%
   scale_color_manual(values = artis_palette(6))
 
 lm <- lm(exposure ~ shannon * region, data = shannon_exp)
-
-
 summary(lm)
 ```
 
@@ -626,47 +1121,31 @@ taxa <- exposed_foods %>%
   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
   group_by(sciname) %>%
   summarise(
-    change_in_stock = sum(change_in_stock),
-    live_weight_t   = sum(live_weight_t),
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   ungroup() %>%
   mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
-  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
-  mutate(pct_change = sum(pct_contribution, na.rm = TRUE)) %>%
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>% # Calculate the percent contribution that each taxa has toward the total global percent change in consumption
+  mutate(pct_change = sum(pct_contribution, na.rm = TRUE)) %>% # Global percent projected change in consumption
   mutate(prop_consumption = live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
   ungroup()
 
-taxa %>%
-  filter(pct_contribution < 0) %>%
-  # group_by(consumer_iso3c) %>%
-  top_n(-pct_contribution, n = 5) %>%
-  ggplot(aes(x = sciname, y = pct_contribution)) +
-           geom_col()
-
-taxa %>%
-  filter(pct_contribution > 0) %>%
-  # group_by(consumer_iso3c) %>%
-  top_n(-pct_contribution, n = 5) %>%
-  ggplot(aes(x = sciname, y = pct_contribution)) +
-           geom_col()
-
-taxa_by_eez <- exposed_foods %>%
+# Calculate the percentage that global consumption is projected to change 
+projected_global_change <- exposed_foods %>%
   select(-ssp585, -cv_ssp585) %>%
   mutate(future_change_catch = 1 + (ssp126 / 100)) %>%
   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
-  group_by(consumer_iso3c, sciname) %>%
   summarise(
-    change_in_stock = sum(change_in_stock),
-    live_weight_t   = sum(live_weight_t),
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  group_by(sciname) %>%
   mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
-  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
-  mutate(pct_change = sum(pct_contribution, na.rm = TRUE)) %>%
-  mutate(prop_consumption = live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
-  ungroup()
+  pull(pct_change)
+
+
 
 
 most_exposed_species <- taxa %>%
@@ -687,12 +1166,17 @@ taxa_by_eez <- exposed_foods %>%
   mutate(change_in_stock = live_weight_t * future_change_catch) %>%
   group_by(eez_iso3c, sciname) %>%
   summarise(
-    change_in_stock = sum(change_in_stock),
-    live_weight_t   = sum(live_weight_t),
+    change_in_stock = sum(change_in_stock, na.rm = TRUE),
+    live_weight_t   = sum(live_weight_t, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(pct_change = 100 * ((change_in_stock - live_weight_t)) / live_weight_t) %>%
-  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE))
+  mutate(pct_contribution = pct_change * live_weight_t / sum(live_weight_t, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(pct_change = sum(pct_change * (live_weight_t / sum(live_weight_t, na.rm = TRUE)), na.rm = TRUE)) ## 
+
+# Ensure that country percents add up to global average (should be 4.99267% if using 2 species diagonal weighted gapfill)
+unique(taxa_by_eez$pct_change) %>% round(5) == projected_global_change %>% round(5)
   
   
   # Check that the percent contributions to global exposure across EEZs for each species
@@ -742,6 +1226,7 @@ library(ggplot2)
 library(ggsankey)
 library(networkD3)
 
+# Most exposed taxa
 taxa_by_eez %>%
   filter(sciname %in% most_exposed_species) %>%
   group_by(sciname) %>%
@@ -764,6 +1249,7 @@ taxa_by_eez %>%
         panel.grid = element_blank(),
         legend.position = "none")
 
+# Least exposed taxa
 taxa_by_eez %>%
   filter(sciname %in% least_exposed_species) %>%
   group_by(sciname) %>%
