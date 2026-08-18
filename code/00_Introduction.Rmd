@@ -1,0 +1,110 @@
+---
+title: "Introduction"
+author: "Connor Quiroz, Juliano Palacios-Abrantes, and  Jessica A. Gephart"
+date: "2026-08-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+
+
+# Read in data
+
+```{r}
+# Read in aquatic animal protein reliance data
+aquatic_reliance <- read_csv("../data/miscellaneous/fao_aquatic_reliance_source.csv")
+
+# Read in consumption data
+consumption_full <- read_parquet("../data/miscellaneous/consumption_full.parquet")
+```
+# When did aquaculture surpass capture fisheries?
+
+```{r}
+# Calculate the aggregate protein reliance by habitat and method
+agg_rel_method <- aquatic_reliance %>%
+  group_by(
+  year,
+  data_source,
+  method,
+  food_group
+  ) %>%
+  # Calculate annual global aquatic animal protein consumption
+  summarize(food_group_total_protein_t = sum(protein_consumed_t_peryr),
+            .groups = "keep") %>%
+  ungroup() %>%
+  group_by(year) %>%
+  mutate(perc_animal_protein = 100 *
+           (food_group_total_protein_t / sum(food_group_total_protein_t))) %>%
+  filter(food_group == "aquatic")
+
+agg_rel_method %>%
+  filter(method != "unknown")
+```
+
+
+# What percent of global-animal source protein consumption do marine caught aquatic foods make up?
+
+```{r}
+# Calculate the aggregate protein reliance by habitat and method
+agg_rel_habitat_method <- aquatic_reliance %>%
+  group_by(
+  year,
+  data_source,
+  method,
+  habitat,
+  food_group
+  ) %>%
+  # Calculate annual global aquatic animal protein consumption
+  summarize(food_group_total_protein_t = sum(protein_consumed_t_peryr),
+            .groups = "keep") %>%
+  ungroup() %>%
+  group_by(year) %>%
+  mutate(perc_animal_protein = 100 *
+           (food_group_total_protein_t / sum(food_group_total_protein_t))) %>%
+  filter(food_group == "aquatic") %>%
+  # Remove overlapping FBS years
+  filter(year == 2023)
+
+agg_rel_habitat_method %>%
+  mutate(perc_animal_protein = round(perc_animal_protein, 1)) %>%
+  arrange(-perc_animal_protein)
+```
+
+# What proportion of marine captures has increased 
+```{r}
+# How many countries in each region source a majority of their marine capture foods
+# from foreign sources?
+ consumption_full %>%
+  filter(method == "capture",
+         habitat == "marine") %>%
+  group_by(year, consumer_iso3c, consumption_source) %>%
+  summarize(consumption_live_t = sum(consumption_live_t)) %>%
+  group_by(year, consumer_iso3c) %>%
+  mutate(prop_consumption = consumption_live_t / sum(consumption_live_t)) %>% 
+  filter(year == 2023) %>%
+  filter(consumption_source == "foreign") %>%
+  add_region("consumer_iso3c", "region") %>%
+  group_by(region) %>%
+  count(prop_consumption > 0.5)
+
+# What are some example countries with a majority in marine capture consumption?
+ consumption_full %>%
+  filter(method == "capture",
+         habitat == "marine") %>%
+  group_by(year, consumer_iso3c, consumption_source) %>%
+  summarize(consumption_live_t = sum(consumption_live_t)) %>%
+  group_by(year, consumer_iso3c) %>%
+  mutate(prop_consumption = consumption_live_t / sum(consumption_live_t)) %>% 
+  filter(year == 2023) %>%
+  filter(consumption_source == "foreign") %>%
+  add_region("consumer_iso3c", "region") %>%
+  filter(region %in% c("North America", "Europe", "Africa")) %>%
+   select(-consumption_live_t) %>%
+   View()
+```
+
+North America, Europe, and Africa have particularly increased their foreign consumption over the years, exceeding domestic consumption in some countries like Canada, Seychelles, and Austria.
