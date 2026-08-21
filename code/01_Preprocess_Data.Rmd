@@ -29,7 +29,7 @@ FIXIT: Warning: There were 250 warnings in `mutate()` check out where those 250 
 
 # Overview
 
-This notebook defines four functions that build the exposure, sensitivity, and
+This script defines four functions that build the exposure, sensitivity, and
 adaptive capacity (E/S/AC) components used to calculate climate risk. Each
 function handles one job:
 
@@ -70,7 +70,10 @@ preprocess_climate_data <- function(dir) {
     df_i %>%
       left_join(species_names, by = "taxon_key") %>%
       mutate(taxon_name = str_to_lower(taxon_name),
-             file_found_in = as.numeric(sub(".*_(\\d+)\\.csv$", "\\1", f))) %>% # variable that stores which file name X species was found in (will be used to ensure that species are found in their correct file names and not multiple files)
+             # variable that stores which file name X species was found in
+             # (will be used to ensure that species are found in their correct
+             # file names and not multiple files)
+             file_found_in = as.numeric(sub(".*_(\\d+)\\.csv$", "\\1", f))) %>% 
       select(taxon_name, eez_name, ssp, mean_mcp_delta_2030, file_found_in) %>%
       pivot_wider(names_from = ssp, values_from = mean_mcp_delta_2030, values_fn = mean)
   })
@@ -127,7 +130,599 @@ weighted % change in available stock under SSP1-2.6 and SSP5-8.5.
 - `"total"` — retains the full consumption portfolio and uses a simpler
   `1 + (x / 100)` multiplier.
 
-```{r build-exposure}
+## Bayesian gap filling
+
+### Perform Bayesian estimation on mcp measures to generate posteriors
+
+Here we collect the data, format the data, and set starting values to be passsed
+into Stan model for model fit. This function returns the Stan fit, which
+posteriors will be extracted from in the following function.
+
+```{r build-bayesian-lookup-table}
+taxonomic_bayesian_gapfill <- function(df = df, 
+                                  assumed_sd,
+                                  method = c("eez_iso3c", "realm", "region"),
+                                  ssp = c("ssp126", "ssp585")) {
+ 
+  # Get distinct values of sciname / EEZ iso3c pairs with their respective ssp value
+  df <- df %>%
+    filter(!is.na(ssp126) | !is.na(ssp585)) %>%
+    distinct(sciname, eez_iso3c, all_of(across(ssp)))
+  
+  # Average ssp values by sciname / realm pair
+  if (method == "realm") {
+    df <- df %>%
+    left_join(
+        ecoregion %>% select(iso3c, realm),
+        by = c("eez_iso3c" = "iso3c")
+      ) %>%
+      group_by(sciname, realm) %>%
+      summarize(!!sym(ssp) := mean(!!sym(ssp)))
+  }
+  
+  # Average ssp values by sciname / region pair
+  if (method == "region") {
+    df <- df %>%
+    add_region("eez_iso3c", "region") %>%
+      group_by(sciname, region) %>%
+      summarize(!!sym(ssp) := mean(!!sym(ssp)))
+  }
+  
+  # Add taxa levels back to data
+  df <- df %>%
+    left_join(sciname_taxa, by = "sciname") %>%
+    select(-species, -superclass, -subfamily, -taxa_level) %>%
+    mutate(
+        genus = case_when(
+          sciname == "crassostrea gigas" ~ "crassostrea", TRUE ~ genus
+        ),
+        family = case_when(
+          sciname == "crassostrea gigas" ~ "ostreidae", TRUE ~ family
+        ),
+        order = case_when(
+          sciname == "crassostrea gigas" ~ "ostreidae", TRUE ~ order
+        ),
+        class = case_when(
+          sciname == "crassostrea gigas" ~ "bivalvia", TRUE ~ class
+        ),
+        phylum = case_when(
+          sciname == "crassostrea gigas" ~ "mollusca", 
+          sciname == "petromyzon marinus" ~ "chordata",
+          TRUE ~ phylum,
+        ),
+        kingdom = case_when(
+          sciname == "crassostrea gigas" ~ "animalia", TRUE ~ kingdom
+        )
+      )
+  
+  ##################### KINGDOM #####################
+  # Get the unique EEZ's used in each kingdom
+  kingdom_eezs <- df %>%
+    distinct(!!sym(method)) %>%
+    pull(!!sym(method))
+  
+  # Get the unique kingdoms used
+  kingdom <- df %>%
+    distinct(kingdom) %>%
+    pull(kingdom)
+  
+  # Get the all the kingdoms that correspond to the geographic grouping
+  kingdoms <- df %>%
+    distinct(!!sym(method), kingdom) %>%
+    pull(kingdom)
+  
+  num_eezs <- length(kingdom_eezs) # Calculate the number of EEZs
+  num_kingdom <- length(kingdom) 
+  
+  kingdom_combination_nrow <- num_eezs * num_kingdom
+  
+  eez_kingdom_lookup <- rep(NA_character_, kingdom_combination_nrow)
+  kingdom_name_lookup <- rep(NA_character_, kingdom_combination_nrow)
+  
+  loop_iteration_nrow_kingdom <- 1
+  
+  for (eez in kingdom_eezs) {
+    for (k in kingdom) {
+      eez_kingdom_lookup[loop_iteration_nrow_kingdom] <- eez
+      kingdom_name_lookup[loop_iteration_nrow_kingdom] <- k
+      loop_iteration_nrow_kingdom <- loop_iteration_nrow_kingdom + 1
+    }
+  }
+  
+  ##################### PHYLUM #####################
+  phylum_eezs <- df %>%
+    
+    distinct(!!sym(method), kingdom, phylum) %>%
+    pull(!!sym(method))
+  
+  phylum_kingdom <- df %>%
+    
+    distinct(!!sym(method), kingdom, phylum) %>%
+    pull(kingdom)
+  
+  phylum <- df %>%
+    
+    distinct(!!sym(method), kingdom, phylum) %>%
+    pull(phylum)
+  
+  phylum_combination_nrow <- length(phylum)
+  
+  phylum_to_kingdom_lookup <- rep(NA_integer_, phylum_combination_nrow)
+  
+  for(loop in 1:phylum_combination_nrow){
+    idx <- which(
+      phylum_eezs[loop] == eez_kingdom_lookup &
+      phylum_kingdom[loop] == kingdom_name_lookup
+    )
+    phylum_to_kingdom_lookup[loop] <- idx[1]
+  }
+  
+  ##################### CLASS #####################
+  class_eezs <- df %>%
+    
+    distinct(!!sym(method), phylum, class) %>%
+    pull(!!sym(method))
+  
+  class_phylum <- df %>%
+    
+    distinct(!!sym(method), phylum, class) %>%
+    pull(phylum)
+  
+  class <- df %>%
+    
+    distinct(!!sym(method), phylum, class) %>%
+    pull(class)
+  
+  class_combination_nrow <- length(class)
+  
+  class_to_phylum_lookup <- rep(NA_integer_, class_combination_nrow)
+  
+  for(loop in 1:class_combination_nrow){
+    idx <- which(
+      class_eezs[loop] == phylum_eezs &
+      class_phylum[loop] == phylum
+    )
+    class_to_phylum_lookup[loop] <- idx[1]
+  }
+  
+  ##################### ORDER #####################
+  order_eezs <- df %>%
+    
+    distinct(!!sym(method), class, order) %>%
+    pull(!!sym(method))
+  
+  order_class <- df %>%
+    
+    distinct(!!sym(method), class, order) %>%
+    pull(class)
+  
+  order <- df %>%
+    
+    distinct(!!sym(method), class, order) %>%
+    pull(order)
+  
+  order_combination_nrow <- length(order)
+  
+  order_to_class_lookup <- rep(NA_integer_, order_combination_nrow)
+  
+  for(loop in 1:order_combination_nrow){
+    idx <- which(
+      order_eezs[loop] == class_eezs &
+      order_class[loop] == class
+    )
+    order_to_class_lookup[loop] <- idx[1]
+  }
+  
+  ##################### FAMILY #####################
+  family_eezs <- df %>%
+    
+    distinct(!!sym(method), order, family) %>%
+    pull(!!sym(method))
+  
+  family_order <- df %>%
+    
+    distinct(!!sym(method), order, family) %>%
+    pull(order)
+  
+  family <- df %>%
+    
+    distinct(!!sym(method), order, family) %>%
+    pull(family)
+  
+  family_combination_nrow <- length(family)
+  
+  family_to_order_lookup <- rep(NA_integer_, family_combination_nrow)
+  
+  for(loop in 1:family_combination_nrow){
+    idx <- which(
+      family_eezs[loop] == order_eezs &
+      family_order[loop] == order
+    )
+    family_to_order_lookup[loop] <- idx[1]
+  }
+  
+  ##################### GENUS #####################
+  genus_eezs <- df %>%
+    
+    distinct(!!sym(method), family, genus) %>%
+    pull(!!sym(method))
+  
+  genus_family <- df %>%
+    distinct(!!sym(method), family, genus) %>%
+    pull(family)
+  
+  genus <- df %>%
+    distinct(!!sym(method), family, genus) %>%
+    pull(genus)
+  
+  genus_combination_nrow <- length(genus)
+  
+  genus_to_family_lookup <- rep(NA_integer_, genus_combination_nrow)
+  
+  for(loop in 1:genus_combination_nrow){
+    idx <- which(
+      genus_eezs[loop] == family_eezs &
+      genus_family[loop] == family
+    )
+    genus_to_family_lookup[loop] <- idx[1]
+  }
+  
+  ##################### SPECIES #####################
+  species_eezs <- df %>%
+    distinct(!!sym(method), genus, sciname) %>%
+    pull(!!sym(method))
+  
+  species_genus <- df %>%
+    distinct(!!sym(method), genus, sciname) %>%
+    pull(genus)
+  
+  species <- df %>%
+    distinct(!!sym(method), genus, sciname) %>%
+    pull(sciname)
+  
+  species_combination_nrow <- length(species)
+  
+  species_to_genus_lookup <- rep(NA_integer_, species_combination_nrow)
+  
+  for(loop in 1:species_combination_nrow){
+    idx <- which(
+      species_eezs[loop] == genus_eezs &
+      species_genus[loop] == genus
+    )
+    species_to_genus_lookup[loop] <- idx[1]
+  }
+  
+############################## Set input data for Stan model
+  ssp_obs <- df %>%
+    filter(!is.na(!!sym(ssp))) %>%
+    distinct(
+      across(all_of(method)),
+      across(all_of(ssp)),
+      genus,
+      species,
+      ) %>%
+  pull(!!sym(ssp))
+
+  
+# Test to ensure number of observations matches the number of predicted columns of the lookup table
+stopifnot(
+  length(ssp_obs) ==
+    species_combination_nrow
+)
+
+# Create list of data to be passed into Stan
+stan_data <- list(
+
+  kingdom_combination_nrow =
+    kingdom_combination_nrow,
+
+  phylum_combination_nrow =
+    phylum_combination_nrow,
+
+  class_combination_nrow =
+    class_combination_nrow,
+
+  order_combination_nrow =
+    order_combination_nrow,
+
+  family_combination_nrow =
+    family_combination_nrow,
+
+  genus_combination_nrow =
+    genus_combination_nrow,
+
+  species_combination_nrow =
+    species_combination_nrow,
+
+  phylum_to_kingdom_lookup =
+    as.integer(phylum_to_kingdom_lookup),
+
+  class_to_phylum_lookup =
+    as.integer(class_to_phylum_lookup),
+
+  order_to_class_lookup =
+    as.integer(order_to_class_lookup),
+
+  family_to_order_lookup =
+    as.integer(family_to_order_lookup),
+
+  genus_to_family_lookup =
+    as.integer(genus_to_family_lookup),
+
+  species_to_genus_lookup =
+    as.integer(species_to_genus_lookup),
+
+  ssp_obs = as.vector(ssp_obs),
+  
+  sigma_obs = assumed_sd
+
+)
+  
+############################## Set inits for stan model
+  init_fun <- function() {
+
+  species_init <- ssp_obs
+
+  genus_init <- rnorm(
+    genus_combination_nrow,
+    mean(species_init),
+    5
+  )
+
+  family_init <- rnorm(
+    family_combination_nrow,
+    mean(genus_init),
+    5
+  )
+
+  order_init <- rnorm(
+    order_combination_nrow,
+    mean(family_init),
+    5
+  )
+
+  class_init <- rnorm(
+    class_combination_nrow,
+    mean(order_init),
+    5
+  )
+
+  phylum_init <- rnorm(
+    phylum_combination_nrow,
+    mean(class_init),
+    5
+  )
+
+  kingdom_init <- runif(
+    kingdom_combination_nrow,
+    -25,
+    25  
+  )
+
+  list(
+
+    ssp_pred_kingdom_lookup =
+      kingdom_init,
+
+    ssp_pred_phylum_lookup =
+      phylum_init,
+
+    ssp_pred_class_lookup =
+      class_init,
+
+    ssp_pred_order_lookup =
+      order_init,
+
+    ssp_pred_family_lookup =
+      family_init,
+
+    ssp_pred_genus_lookup =
+      genus_init,
+
+    ssp_pred_species_lookup =
+      species_init,
+    
+    sigma_phylum = 5,
+    
+    sigma_class = 7,
+    
+    sigma_order = 8,
+    
+    sigma_family = 10,
+    
+    sigma_genus = 12,
+    
+    sigma_species = 15
+
+  )
+
+  }
+  
+  
+  
+
+  fit <- rstan::stan(
+    file = "hierarchical_ssp.stan",
+    data = stan_data,
+    init = init_fun,
+    chains = 3,
+    iter = 2000, 
+    warmup = 1000,
+    cores = 3,
+    refresh = 100)
+  
+  return(list(
+  fit           = fit,
+  genus_eezs    = genus_eezs,
+  family_eezs   = family_eezs,
+  order_eezs    = order_eezs,
+  class_eezs    = class_eezs,
+  phylum_eezs   = phylum_eezs,
+  kingdom_eezs  = kingdom_eezs,
+  genus         = genus,
+  family        = family,
+  order         = order,
+  class         = class,
+  phylum        = phylum,
+  kingdom       = kingdoms
+))
+   
+}
+```
+
+### Create Bayesian lookup table
+
+```{r}
+build_bayesian_lookup <-function(df, ecoregion, assumed_sd) {
+
+  cat(sprintf("Building Bayesian lookup table...\n"))
+
+# ------------------------------- EEZ
+
+## SSP 126
+
+### Run bayesian model DO NOT OPEN OUTPUT FIT OR R WILL CRASH
+output <- taxonomic_bayesian_gapfill(df = df, assumed_sd = assumed_sd,
+                                     method = "eez_iso3c", ssp = "ssp126")
+
+fit_eez_iso3c_126 <- output$fit
+
+### Extract mcmc samples from EEZ fit
+mcmc_eez_126 <- rstan::extract(fit_eez_iso3c_126, permuted = TRUE)
+
+saveRDS(mcmc_eez_126, paste0("../output/bayesian/",as.character(assumed_sd),"_sd","/mcmc_ssp126.rds"))
+
+### calculate median posteriors for each taxa
+genus_eez_med_126 <- apply(mcmc_eez_126$ssp_pred_genus_lookup, MARGIN = 2, FUN = median)
+family_eez_med_126 <- apply(mcmc_eez_126$ssp_pred_family_lookup, MARGIN = 2, FUN = median) 
+order_eez_med_126 <- apply(mcmc_eez_126$ssp_pred_order_lookup, MARGIN = 2, FUN = median) 
+class_eez_med_126 <- apply(mcmc_eez_126$ssp_pred_class_lookup, MARGIN = 2, FUN = median) 
+phylum_eez_med_126 <- apply(mcmc_eez_126$ssp_pred_phylum_lookup, MARGIN = 2, FUN = median) 
+kingdom_eez_med_126 <- apply(mcmc_eez_126$ssp_pred_kingdom_lookup, MARGIN = 2, FUN = median)
+
+# Refersh environment
+rm(output)
+
+## SSP 585
+
+### Run bayesian modelDO NOT OPEN OUTPUT FIT OR R WILL CRASH
+output <- taxonomic_bayesian_gapfill(df = df, assumed_sd = assumed_sd,
+                                                method = "eez_iso3c", ssp = "ssp585")
+
+fit_eez_iso3c_585 <- output$fit
+
+### Extract mcmc samples from EEZ fit
+mcmc_eez_585 <- rstan::extract(fit_eez_iso3c_585, permuted = TRUE)
+
+saveRDS(mcmc_eez_126, paste0("../output/bayesian/",as.character(assumed_sd),"_sd","/mcmc_ssp585.rds"))
+
+
+### calculate median posteriors for each taxa
+genus_eez_med_585 <- apply(mcmc_eez_585$ssp_pred_genus_lookup, MARGIN = 2, FUN = median)
+family_eez_med_585 <- apply(mcmc_eez_585$ssp_pred_family_lookup, MARGIN = 2, FUN = median) 
+order_eez_med_585 <- apply(mcmc_eez_585$ssp_pred_order_lookup, MARGIN = 2, FUN = median) 
+class_eez_med_585 <- apply(mcmc_eez_585$ssp_pred_class_lookup, MARGIN = 2, FUN = median) 
+phylum_eez_med_585 <- apply(mcmc_eez_585$ssp_pred_phylum_lookup, MARGIN = 2, FUN = median) 
+kingdom_eez_med_585 <- apply(mcmc_eez_585$ssp_pred_kingdom_lookup, MARGIN = 2, FUN = median) 
+
+
+
+## Create EEZ lookup table
+bayesian_lookup_eez_unwgt <- data.frame(eez_iso3c = c(output$genus_eezs, output$family_eezs, output$order_eezs, output$class_eezs, output$phylum_eezs, output$kingdom_eezs),
+           taxa_name = c(output$genus, output$family, output$order, 
+                         output$class, output$phylum, output$kingdom),
+           eez_avg_ssp126 = c(genus_eez_med_126, family_eez_med_126,
+                              order_eez_med_126, class_eez_med_126,
+                              phylum_eez_med_126, kingdom_eez_med_126),
+           eez_avg_ssp585 = c(genus_eez_med_585, family_eez_med_585,
+                              order_eez_med_585, class_eez_med_585,
+                              phylum_eez_med_585, kingdom_eez_med_585),
+           taxa_level = c(rep("genus", length(output$genus_eezs)),
+                          rep("family", length(output$family_eezs)),
+                          rep("order", length(output$order_eezs)),
+                          rep("class", length(output$class_eezs)),
+                          rep("phylum", length(output$phylum_eezs)),
+                          rep("kingdom", length(output$kingdom_eezs)))) %>%
+  # FIXIT: quick fix, figure out why ostreidae is having duplicates
+  mutate(taxa_level = case_when(
+    taxa_name == "ostreidae" ~ "family",
+    TRUE ~ taxa_level
+  )) %>%
+  group_by(eez_iso3c, taxa_name, taxa_level) %>%
+  summarize(eez_avg_ssp126 = mean(eez_avg_ssp126),
+            eez_avg_ssp585 = mean(eez_avg_ssp585)) %>%
+  mutate(eez_cv_ssp126 = NA,
+         eez_cv_ssp585 = NA) %>%
+  relocate(taxa_level, .after = eez_cv_ssp585) %>%
+  ungroup()
+
+# ------------------------------- Realm
+
+bayesian_lookup_realm_unwgt <- bayesian_lookup_eez_unwgt %>%
+  left_join(
+    ecoregion %>%
+      select(iso3c, realm), 
+    by = c("eez_iso3c" = "iso3c")) %>%
+  select(-eez_iso3c) %>%
+  group_by(realm, taxa_name) %>%
+  summarize(realm_avg_ssp126 = mean(eez_avg_ssp126),
+         realm_avg_ssp585 = mean(eez_avg_ssp585),
+         realm_cv_ssp126 = NA,
+         realm_cv_ssp585 = NA) %>%
+  ungroup() %>%
+  distinct() %>%
+  relocate(realm, .before = "taxa_name") %>%
+  # Add on taxa level
+  left_join(
+    bayesian_lookup_eez_unwgt %>% select(taxa_name, taxa_level) %>% distinct(),
+    by = "taxa_name")
+
+
+
+# ------------------------------- Region
+bayesian_lookup_region_unwgt <- bayesian_lookup_eez_unwgt %>%
+  exploreARTIS::add_region(col = "eez_iso3c", region.col.name = "region") %>%
+  group_by(region, taxa_name) %>%
+  summarize(region_avg_ssp126 = mean(eez_avg_ssp126),
+         region_avg_ssp585 = mean(eez_avg_ssp585),
+         region_cv_ssp126 = NA,
+         region_cv_ssp585 = NA) %>%
+  ungroup() %>%
+  distinct() %>%
+  # Add on taxa level
+  left_join(
+    bayesian_lookup_eez_unwgt %>% select(taxa_name, taxa_level)  %>% distinct(),
+    by = "taxa_name")
+
+# ------------------------------- Global
+bayesian_lookup_global_unwgt <- bayesian_lookup_eez_unwgt %>%
+  exploreARTIS::add_region(col = "eez_iso3c", region.col.name = "region") %>%
+  group_by(taxa_name) %>%
+  summarize(global_avg_ssp126 = mean(eez_avg_ssp126),
+         global_avg_ssp585 = mean(eez_avg_ssp585),
+         global_cv_ssp126 = NA,
+         global_cv_ssp585 = NA) %>%
+  ungroup() %>%
+  distinct() %>%
+  # Add on taxa level
+  left_join(
+    bayesian_lookup_eez_unwgt %>% select(taxa_name, taxa_level)  %>% distinct(),
+    by = "taxa_name")
+
+return(list(
+  eez_gapfills_unwgt      = bayesian_lookup_eez_unwgt,
+  realm_gapfills_unwgt    = bayesian_lookup_realm_unwgt,
+  region_gapfills_unwgt   = bayesian_lookup_region_unwgt,
+  global_gapfills_unwgt   = bayesian_lookup_global_unwgt
+))
+
+}
+```
+
+
+## Build taxa levels
+
+```{r build-taxa-levels}
 # Helper: classify each sciname to its taxonomic level and extract species epithet
 build_taxa_levels <- function(sciname_df) {
   sciname_df %>%
@@ -148,7 +743,11 @@ build_taxa_levels <- function(sciname_df) {
     relocate(species, .before = genus) %>%
     select(-common_name, -isscaap)
 }
+```
 
+## Build MCP averages (for frequentist gap filling)
+
+```{r build-MCP-averages}
 # Helper: for each higher taxonomic level, compute mean SSP values per EEZ
 # so that species with missing projections can borrow from relatives
 generate_mcp_averages <- function(df,
@@ -285,7 +884,11 @@ generate_mcp_averages <- function(df,
   return(x)
   
 }
+```
 
+## Build taxa lookup (for frequentist gap filling)
+
+```{r build-taxa-lookup-frequentist}
 # Helper: compile averages across all gap filling combinations into a list
 # that will be used to gap fill NA MCP projections in consumption data
 build_taxa_lookup <- function(df, ecoregion, num_species) {
@@ -368,7 +971,11 @@ build_taxa_lookup <- function(df, ecoregion, num_species) {
   ))
       
 }
+```
 
+## Helper for gap filling values from lookup table
+
+```{r gap-filling-helper-from-lookup-table}
 # Helper: walk up the taxonomic ladder and fill NA SSP values from the nearest
 # available ancestor within the same EEZ
 fill_higher_taxa_helper <- function(df,
@@ -403,7 +1010,7 @@ fill_higher_taxa_helper <- function(df,
     global = c(join_by_map)
   )
   
-  df <- df %>%
+   df <- df %>%
     select(-taxa_level) %>%
     ## Join data to EEZ interpolated data
     left_join(
@@ -435,33 +1042,42 @@ fill_higher_taxa_helper <- function(df,
   return(df)
   
 }
+```
 
+## Perform gap filling
+
+```{r perform-gap-filling}
 # Helper: conduct gap filling based on selected method
 fill_with_higher_taxa <- function(df,
                                   gap_filling_method,
                                   averaging,
                                   ecoregion,
-                                  num_species) {
+                                  num_species,
+                                  assumed_sd) {
   
-  if(!file.exists(paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds"))) {
-    
+  if (gap_filling_method != "bayesian") {
+    if(!file.exists(paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds"))) {
     # Create directory if doesn't already exist
     if (!dir.exists(paste0("../data/exposure/lookup_tables/",num_species,"_species/"))) {
       dir.create(paste0("../data/exposure/lookup_tables/",num_species,"_species/"))
     }
-    
     # Build lookup_table
     lookup_table <- build_taxa_lookup(df = df, ecoregion = ecoregion, num_species = num_species)
     saveRDS(lookup_table, paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds")) # Save lookup table
-     
   } else {
-    
-    lookup_table <- readRDS(paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds"))
-    
+    lookup_table <- readRDS(paste0("../data/exposure/lookup_tables/",num_species,"_species/lookup_table.rds")) 
   }
-  
+  } else {
+    if (!file.exists("../data/exposure/lookup_tables/bayesian/lookup_table.rds")) {
+      # FIXIT: Add an automatically creating directory, instead of me putting it in manually
+      lookup_table <- build_bayesian_lookup(df = df, ecoregion, assumed_sd = assumed_sd)
+      saveRDS(lookup_table, paste0("../data/exposure/lookup_tables/bayesian/",as.character(assumed_sd),"_sd/","lookup_table.rds"))
+    } else { 
+      lookup_table <- readRDS(paste0("../data/exposure/lookup_tables/bayesian/",as.character(assumed_sd),"_sd/","lookup_table.rds"))
+    }
+  }
+
   cat(sprintf("✔️ Lookup table loaded in\n"))
-  
   
   # Set taxonomic levels to iterate through
   tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
@@ -475,7 +1091,7 @@ fill_with_higher_taxa <- function(df,
   # ---------------------------------------------------------------------------
   # EEZ-level gap filling
   # ---------------------------------------------------------------------------
-  if (gap_filling_method != "hierarchical" & gap_filling_method != "diagonal") {
+  if ((gap_filling_method != "hierarchical" & gap_filling_method != "diagonal" & gap_filling_method != "bayesian")) {
    
     for (level in tax_levels) {
       
@@ -635,9 +1251,9 @@ fill_with_higher_taxa <- function(df,
 
   
   # ---------------------------------------------------------------------------
-  # Diagonal gapfilling 
+  # Diagonal gapfilling (frequentist & Bayesian)
   # ---------------------------------------------------------------------------
-  if (gap_filling_method == "diagonal") {
+  if (gap_filling_method == "diagonal" | gap_filling_method == "bayesian") {
     
     # 1. Initialize the 7x4 matrix
     pattern <- matrix(data = c(1,3,6,10,2,5,9,14,4,8,13,18,7,12,
@@ -696,8 +1312,12 @@ fill_with_higher_taxa <- function(df,
   
   return(out_df)
 }
+```
 
-build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption, num_species) {
+## Calculate exposure
+
+```{r build-exposure}
+build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption, num_species, assumed_sd) {
   # Load in file names and species names acquired from the sau mcp data
   file_names <- readRDS("../data/exposure/utils/file_names.rds")
   species_names <- readRDS("../data/exposure/utils/species_names.rds")
@@ -949,7 +1569,7 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
           sciname == "crassostrea gigas" ~ "animalia", TRUE ~ kingdom
         )
       )
-  
+    
   #### Use gap filling if user input says to, otherwise avoid
   if (gap_filling_method == "none") {
     
@@ -963,7 +1583,8 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
                                gap_filling_method = gap_filling_method,
                                averaging = averaging,
                                ecoregion = ecoregion,
-                               num_species = num_species)
+                               num_species = num_species,
+                               assumed_sd = assumed_sd)
     
     
   }
@@ -991,22 +1612,18 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
   
 # Save interpolated consumption data to csv if gapfilling was done
 if (gap_filling_method != "none") {
-  
-  
-  if (!file.exists(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/consumption_projections_gap_filled_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet"))) {
-    
+  if (gap_filling_method == "bayesian") {
+    out_path <- paste0("../output/consumption_projections_gap_filled/bayesian/",as.character(assumed_sd),"_sd/consumption_projections_gap_filled_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet")
+  } else {
+   if (!file.exists(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/consumption_projections_gap_filled_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet"))) {
     # Create directory if doesn't already exist
     if (!dir.exists(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/"))) {
-      
       dir.create(paste0("../output/consumption_projections_gap_filled/", num_species, "_species/"))
-      
     }
-    
     out_path <- paste0("../output/consumption_projections_gap_filled/", num_species, "_species/consumption_projections_gap_filled_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.parquet")
-  write_parquet(interpolated, out_path)
-    
+  } 
   }
-
+  write_parquet(interpolated, out_path)
 }
   
   # Pivot to longer
@@ -1223,10 +1840,11 @@ writes the output parquet.
 ```{r build-e-s-ac-data}
 build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfolio"),
                               dir,
-                              gap_filling_method = c("none", "region", "realm", "thorough", "hierarchical", "diagonal"),
+                              gap_filling_method = c("none", "region", "realm", "thorough", "hierarchical", "diagonal", "bayesian"),
                               averaging = c("unweighted", "weighted", "none"),
                               consumption,
-                              num_species) {
+                              num_species,
+                              assumed_sd) {
   
   gap_filling_method <- match.arg(gap_filling_method)
   averaging <- match.arg(averaging)
@@ -1234,7 +1852,7 @@ build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfoli
   cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
   cat(sprintf("%s gap filling, %s averaging; %d minimum species\n", gap_filling_method, averaging, num_species))
 
-  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method, averaging = averaging, consumption = consumption, num_species = num_species)
+  exposure     <- build_exposure(dir, portfolio, gap_filling_method = gap_filling_method, averaging = averaging, consumption = consumption, num_species = num_species, assumed_sd = assumed_sd)
   sensitivity  <- build_sensitivity(dir)
 
   consuming_countries <- exposure %>% distinct(consumer_iso3c) %>% pull()
@@ -1252,9 +1870,13 @@ build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfoli
   }
   
   if (gap_filling_method == "none") {
-    out_path <- paste0("../output/e_s_ac/", num_species, "_species/e_s_ac_", portfolio, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
+    out_path <- paste0("../output/e_s_ac/", num_species, "_species/e_s_ac_", portfolio, "_", gap_filling_method, "_gapfill.csv")
   } else {
-    out_path <- paste0("../output/e_s_ac/",num_species,"_species/e_s_ac_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.csv") # FIXIT: added producer, need to remove "producer" after testing
+    if (gap_filling_method == "bayesian") {
+      out_path <- paste0("../output/e_s_ac/", as.character(assumed_sd), "_sd/e_s_ac_", portfolio, "_", gap_filling_method, "_gapfill.csv")
+    } else {
+      out_path <- paste0("../output/e_s_ac/",num_species,"_species/e_s_ac_", portfolio, "_", averaging, "_", gap_filling_method, "_gapfill.csv")
+    }
   }
 
   

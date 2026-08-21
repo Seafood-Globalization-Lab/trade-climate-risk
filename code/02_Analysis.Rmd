@@ -1,0 +1,529 @@
+---
+title: "01 — Climate Risk Analysis"
+author: "Connor Quiroz, Juliano Palacios-Abrantes, and  Jessica A. Gephart"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+library(gtools)
+library(here)
+library(showtext)
+
+
+# Set up global font family for plots
+# Register a specific static weight from the variable font file
+font_add(family = "Bahnschrift", regular = "/path/to/bahnschrift.ttf")
+showtext_auto()
+showtext_opts(dpi = 96)  # match whatever dpi your ggsave/rsvg pipeline uses
+
+# font_import()
+family = "Bahnschrift"
+```
+
+# Objectives
+
+This notebook:
+
+1. Runs `00_Preprocess_Data.Rmd` to load all data-building functions into the
+   environment.
+2. Builds E/S/AC datasets for two portfolio types: a country's **foreign
+   imports** and its **entire consumption** portfolio.
+3. Calculates climate risk for each portfolio.
+4. Runs a sensitivity analysis on adaptive capacity components *(work in
+   progress)*.
+
+---
+
+# Setup
+
+> **User input:** Set `file_path` to the root of your input data folder.
+> Everything else runs automatically.
+
+## Calculate the risk index based on a country’s exposure, sensitivity, and adaptive capacity components.
+
+```{r load-working-directory-and-functions}
+# Set working directory for pulling in data easily path here
+setwd("C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/code")
+
+## Connor's laptop path
+file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
+
+dir <- file_path
+
+## Connor's desktop path
+# file_path <- "C:/Users/cjqui/OneDrive/Desktop/SGL/Chapter 2/trade-climate-risk/data/"
+
+## Jessica's path:
+# file_path <- ""
+
+# Knitting 00_Preprocess_Data.Rmd loads all helper functions for generating the exposure, sensitiviyty, adaptive capacity.
+knitr::knit("01_Preprocess_Data.Rmd", output = tempfile())
+
+source("../utils/create_map.R") ## For creating maps
+source("../utils/calculate_vulnerability.R") ## For calculating vulnerability
+source("../utils/calculate_simulated_vulnerability.R") ## For calculating simulated vulnerability (sensitivity analysis)
+# source("../utils/sens_sensitivity_analysis.R")  ## Sensitivity analysis on the sensitivity measure (FIXIT: work in progress)
+source("../utils/exp_sensitivity_analysis.R") ## Sensitivity analysis on the exposure measure
+source("../utils/sens_ac_sensitivity_analysis.R") ## Sensitivity analysis on the exposure measure
+source("../utils/number_unique_combs.R")  # Calculate the different unique combinations given the number of features (Used in sensitivity analysis)
+```
+
+---
+
+# Climate data preprocessing
+
+Run once per session — reads DBEM species files and writes
+`future_climate_joined.csv` to `../output/`. Subsequent calls to
+`build_e_s_ac_data()` read from that file, so re-running this is only needed
+if the underlying DBEM inputs change.
+
+```{r preprocess-climate}
+# preprocess_climate_data(dir = file_path)
+```
+
+---
+
+# Build Exposure / Sensitivity / Adaptive capacity datasets
+
+## Read in consumption data
+
+```{r}
+## Read in conumption data
+  consumption <- read_parquet(paste0(dir, "example_consumption_eez_2024_12_06.parquet")) %>%
+    filter(year == 2019, habitat == "marine", method == "capture")
+    # filter(year %in% 2015:2019, habitat == "marine", method == "capture") 
+
+```
+
+This pulls from the *00_Preprocess_Data.Rmd* file
+
+```{r build-e_s_ac-data}
+# Build e/s/ac datasets
+
+# ---------------------------------------------------------------------------
+# No gap filling
+# ---------------------------------------------------------------------------
+## Total consumption portfolio: No gapfilling
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_none_gapfill.csv")) {
+  e_s_ac_total_no_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "none",
+                                                averaging = "none",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_no_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_none_gapfill.csv")
+}
+
+# ---------------------------------------------------------------------------
+# Region-level gap filling
+# ---------------------------------------------------------------------------
+### Unweighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_region_gapfill.csv")) {
+  e_s_ac_total_unwgt_region_gapfill    <- build_e_s_ac_data(portfolio = "total",
+                                                dir = file_path,
+                                                gap_filling_method = "region",
+                                                averaging = "unweighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_unwgt_region_gapfill <-
+    read_csv("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_region_gapfill.csv")
+}
+
+### Weighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_weighted_region_gapfill.csv")) {
+  e_s_ac_total_wgt_region_gapfill    <- build_e_s_ac_data(portfolio = "total",
+                                                dir = file_path,
+                                                gap_filling_method = "region",
+                                                averaging = "weighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_wgt_region_gapfill <-
+    read_csv("../output/e_s_ac/e_s_ac_total_portfolio_weighted_region_gapfill.csv")
+}
+
+# ---------------------------------------------------------------------------
+# Realm-level gap filling
+# ---------------------------------------------------------------------------
+### Unweighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_realm_gapfill.csv")) {
+  e_s_ac_total_unwgt_realm_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "realm",
+                                                averaging = "unweighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_unwgt_realm_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_realm_gapfill.csv")
+}
+
+### Weighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_weighted_realm_gapfill.csv")) {
+  e_s_ac_total_wgt_realm_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "realm",
+                                                averaging = "weighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_wgt_realm_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_weighted_realm_gapfill.csv")
+}
+
+# ---------------------------------------------------------------------------
+# Thorough-level gap filling (i.e., EEZ --> )
+# ---------------------------------------------------------------------------
+### Unweighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_thorough_gapfill.csv")) {
+  e_s_ac_total_unwgt_thorough_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "thorough",
+                                                averaging = "unweighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_unwgt_thorough_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_thorough_gapfill.csv")
+}
+
+### Weighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_weighted_thorough_gapfill.csv")) {
+  e_s_ac_total_wgt_thorough_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "thorough",
+                                                averaging = "weighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_wgt_thorough_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_weighted_thorough_gapfill.csv")
+}
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical-level gap filling
+# ---------------------------------------------------------------------------
+### Unweighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_hierarchical_gapfill.csv")) {
+  e_s_ac_total_unwgt_hierarchical_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "hierarchical",
+                                                averaging = "unweighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_unwgt_hierarchical_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_hierarchical_gapfill.csv")
+}
+
+### Weighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_weighted_hierarchical_gapfill.csv")) {
+  e_s_ac_total_wgt_hierarchical_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "hierarchical",
+                                                averaging = "weighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_wgt_hierarchical_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_weighted_hierarchical_gapfill.csv")
+}
+
+
+# ---------------------------------------------------------------------------
+# Diagonal-level gap filling
+# ---------------------------------------------------------------------------
+### Unweighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_diagonal_gapfill.csv")) {
+  e_s_ac_total_unwgt_diagonal_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "diagonal",
+                                                averaging = "unweighted",
+                                                consumption = consumption)
+} else {
+  e_s_ac_total_unwgt_diagonal_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_unweighted_diagonal_gapfill.csv")
+}
+
+### Weighted averaging
+if (!file.exists("../output/e_s_ac/e_s_ac_total_portfolio_weighted_diagonal_gapfill.csv")) {
+  e_s_ac_total_wgt_diagonal_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "diagonal",
+                                                averaging = "weighted",
+                                                consumption = consumption,
+                                                num_species = 5)
+} else {
+  e_s_ac_total_wgt_diagonal_gapfill <- read_csv("../output/e_s_ac/e_s_ac_total_portfolio_weighted_diagonal_gapfill.csv")
+}
+
+
+e_s_ac_total_wgt_diagonal_gapfill    <- build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "diagonal",
+                                                averaging = "unweighted",
+                                                consumption = consumption,
+                                                num_species = 1)
+
+time <- {for (num_species in c(1,2,5,10,20,50)) {
+
+  for (weighting in c("weighted","unweighted")) {
+
+    build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "diagonal",
+                                                averaging = weighting,
+                                                consumption = consumption,
+                                                num_species = num_species)
+    
+  }
+
+}} %>%
+  system.time()
+
+
+build_e_s_ac_data(portfolio = "total_portfolio",
+                                                dir = file_path,
+                                                gap_filling_method = "bayesian",
+                                                averaging = "unweighted",
+                                                consumption = consumption,
+                                                num_species = 1,
+                                                assumed_sd = 25)
+```
+
+
+---
+
+# Calculate climate vulnerability
+
+This pulls from the *calculate_vulnerability.R* file.
+
+```{r calculate-vulnerability}
+# ---------------------------------------------------------------------------
+# No gap filling
+# ---------------------------------------------------------------------------
+vuln_total_no_gapfill <- calculate_vulnerability(e_s_ac_total_no_gapfill, coverage = "entire portfolio", drop_na = FALSE)
+
+# ---------------------------------------------------------------------------
+# Realm gap filling
+# ---------------------------------------------------------------------------
+## Unweighted
+vuln_total_unwgt_realm_gapfill <- calculate_vulnerability(e_s_ac_total_unwgt_realm_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# Weighted
+vuln_total_wgt_realm_gapfill <- calculate_vulnerability(e_s_ac_total_wgt_realm_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# ---------------------------------------------------------------------------
+# Region-level gap filling
+# ---------------------------------------------------------------------------
+## Unweighted
+vuln_total_unwgt_region_gapfill <- calculate_vulnerability(e_s_ac_total_unwgt_region_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+## Weighted
+vuln_total_wgt_region_gapfill    <- calculate_vulnerability(e_s_ac_total_wgt_region_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# ---------------------------------------------------------------------------
+# Thorough gap filling
+# ---------------------------------------------------------------------------
+## Unweighted
+vuln_total_unwgt_thorough_gapfill <- calculate_vulnerability(e_s_ac_total_unwgt_thorough_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# Weighted
+vuln_total_wgt_thorough_gapfill <- calculate_vulnerability(e_s_ac_total_wgt_thorough_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# ---------------------------------------------------------------------------
+# Hierarchical gap filling
+# ---------------------------------------------------------------------------
+## Unweighted
+vuln_total_unwgt_hierarchical_gapfill <- calculate_vulnerability(e_s_ac_total_unwgt_hierarchical_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# Weighted
+vuln_total_wgt_hierarchical_gapfill <- calculate_vulnerability(e_s_ac_total_wgt_hierarchical_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# ---------------------------------------------------------------------------
+# Diagonal gap filling
+# ---------------------------------------------------------------------------
+## Unweighted
+vuln_total_unwgt_diagonal_gapfill <- calculate_vulnerability(e_s_ac_total_unwgt_diagonal_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+
+# Weighted
+vuln_total_wgt_diagonal_gapfill <- calculate_vulnerability(e_s_ac_total_wgt_diagonal_gapfill,   coverage = "entire portfolio", drop_na = FALSE)
+```
+
+# Sensitivity analyis
+
+Here, we compare use Kendall tau correlation to compare differences in rank across diffrerent methods for (1) different methdods for calculating exposure; (3) different contributing meausres to sensitivity; (3) the individual variables contributing measures within adaptive capacity; and (4) the grouped measures that contributing to adaptive capacity (i.e., learning, flexibility, assets, social organization), where each grouped measure can contain multiple variables of adaptive capacity. We first run sensitivity analysis on each of the measures
+
+## Analyze the sensitivity of different exposure measures
+
+```{r exposure measurement: sensitivity analysis}
+# Helper function to dynamically select either exposure or vulnerability columns
+# to run sensitivity analysis
+run_sensitivity_analysis <- function(dfs, comparison = c("exposure", "vulnerability")) {
+  comparison <- match.arg(comparison)
+
+  list <- lapply(dfs, function(df) df[[comparison]])   # or `pull()` if you want a vector
+  
+  # Run sensitivity analysis
+  dir_probs_matrix <- exp_sensitivity_analysis(exp_list = list)
+  
+  return(dir_probs_matrix)
+}
+
+# Create a list out of the different exposure calculations
+dfs <- list(vuln_total_no_gapfill,
+             vuln_total_unwgt_region_gapfill,
+             vuln_total_wgt_region_gapfill,
+             vuln_total_unwgt_thorough_gapfill,
+             vuln_total_wgt_thorough_gapfill,
+             vuln_total_unwgt_hierarchical_gapfill,
+             vuln_total_wgt_hierarchical_gapfill,
+             vuln_total_unwgt_diagonal_gapfill,
+             vuln_total_wgt_diagonal_gapfill)
+
+# Run sensitvity analysis
+dir_probs_matrix <- run_sensitivity_analysis(dfs, comparison = "exposure")
+
+
+# compute min r_kendall per combination
+mins <- dir_probs_matrix %>%
+  drop_na() %>%
+  group_by(combination) %>%
+  summarise(
+    min_y = min(r_kendall, na.rm = TRUE) # x‑position of the min
+  )
+
+# Step 2: main plot
+plot <- data.frame(dir_probs_matrix) %>%
+  drop_na() %>%
+  mutate(combination = factor(combination)) %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = combination)) +
+  geom_line() +
+  facet_wrap(~ combination, nrow = 6) +
+  labs(
+    y = "Kendall tau correlation",
+    x = "Dirichlet-assigned weight for focal exposure method",
+    title = "Sensitivity of exposure score"
+  ) +
+  theme_cowplot() +
+  guides(color = "none") +
+  theme(
+    axis.text = element_text(size = 8),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  scale_color_viridis_d(option = "plasma", end = 0.8) +
+
+  # Step 3: add the min labels
+  geom_text(
+    data = mins,
+    aes(x = 0.6, y = 0.6, label = sprintf("Min: %.3f", min_y)),
+    color = "black",
+    size = 2.5,
+    vjust = -0.5,
+    inherit.aes = FALSE
+  )
+
+
+# Save plot
+ggsave("../images/exploratory/sensitiity_analysis_exposure.jpg", plot = plot, device = "jpg", width = 10, height = 6.5, dpi = 300)
+```
+
+## Sensitivity analysis of sensitivity measure
+
+```{r sensitivity measurement: sensitivity analysis}
+# Run sensitivity analysis
+dir_probs_matrix_sensitivity <- sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                                                             analysis = "sensitivity")
+
+plot <- dir_probs_matrix_sensitivity %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var),
+         var = case_when(var == "1" ~ "Foreign reliance (%)",
+                         var == "2" ~ "Marine capture reliance (%)")) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal sensitivity variable", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_sensitivity.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+## Sensitivity analysis on adaptive capacity variables
+
+### Variables within adaptive capacity
+
+```{r adaptive capacity measurement: sensitivity analysis}
+dir_probs_matrix_ac_variables <- sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                                                             analysis = "adaptive_capacity_variables")
+
+plot <- dir_probs_matrix_ac_variables %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var),
+         var = case_when(var == "1" ~ "GDP per capita",
+                         var == "2" ~ "Trade (% of GDP)",
+                         var == "3" ~ "Sanitation",
+                         var == "4" ~ "Supermarkets",
+                         var == "5" ~ "Life expectancy",
+                         var == "6" ~ "Proportion labor force",
+                         var == "7" ~ "Human capacity index",
+                         var == "8" ~ "Government effectiveness",
+                         var == "9" ~ "Food safety capacity",
+                         var == "10" ~ "Rule of law")) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 8),
+          strip.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal adaptive capacity variable", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_adaptive_capacity_variables.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+### Components within adaptive capacity
+
+```{r}
+dir_probs_matrix_ac_components <- 
+  sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                               analysis = "adaptive_capacity_components")
+
+plot <- dir_probs_matrix_ac_components %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var)) %>%
+  mutate(var = case_when(
+         var == "1" ~ "Assets",
+         var == "2" ~ "Flexibility",
+         var == "3" ~ "Social Organization",
+         var == "4" ~ "Learning"),
+         dirichlet_prob = case_when(
+           var != "Learning" ~ dirichlet_prob * 3,
+           TRUE ~ dirichlet_prob
+         )) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 8),
+          strip.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal adaptive capacity component", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_adaptive_capacity_components.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```

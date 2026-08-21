@@ -27,17 +27,37 @@ create_map <- function(data = data,
     left_join(data, by = c("iso_a3" = country.col.name)) %>%
     st_transform(crs = robinson_crs)
   
+  if (color.scale == TRUE) {
+    
+    ggplot() +
+      geom_sf(data = ocean_proj, fill = "#8080ff80") +
+      geom_sf(data = world_map, aes(fill = !!sym(fill)), color = "black") +
+      scale_fill_viridis_c(option = "plasma") +
+      coord_sf(crs = robinson_crs, expand = FALSE, default = FALSE) +
+      theme_void() +
+      theme(
+        legend.position = "bottom",
+        panel.background = element_rect(fill = NA, colour = NA),
+        plot.background  = element_rect(fill = NA, colour = NA),
+        panel.grid = element_blank()
+      )
+    
+  } else {
+    
+    ggplot() +
+      geom_sf(data = ocean_proj, fill = "#8080ff80") +
+      geom_sf(data = world_map, aes(fill = !!sym(fill)), color = "black") +
+      coord_sf(crs = robinson_crs, expand = FALSE, default = FALSE) +
+      theme_void() +
+      theme(
+        legend.position = "bottom",
+        panel.background = element_rect(fill = NA, colour = NA),
+        plot.background  = element_rect(fill = NA, colour = NA),
+        panel.grid = element_blank()
+      )
+    
+  }
+  
   # Plot
-  ggplot() +
-    geom_sf(data = ocean_proj, fill = "#8080ff80") +
-    geom_sf(data = world_map, aes(fill = !!sym(fill)), color = "black") +
-    {if (color.scale) scale_fill_viridis_c(option = "plasma") else scale_fill_manual(values = "gray80")} +
-    coord_sf(crs = robinson_crs, expand = FALSE, default = FALSE) +
-    theme_void() +
-    theme(
-      legend.position = "bottom",
-      panel.background = element_rect(fill = NA, colour = NA),
-      plot.background  = element_rect(fill = NA, colour = NA),
-      panel.grid = element_blank()
-    )
+  
 }

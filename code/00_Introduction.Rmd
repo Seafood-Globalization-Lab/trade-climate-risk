@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(arrow)
 ```
 
 
@@ -108,3 +109,14 @@ agg_rel_habitat_method %>%
 ```
 
 North America, Europe, and Africa have particularly increased their foreign consumption over the years, exceeding domestic consumption in some countries like Canada, Seychelles, and Austria.
+
+# What proportion ofglobal aquatic food consumption does marine capture make up in 2023?
+
+```{r}
+consumption_full %>%
+  mutate(method_habitat = paste0(method, " ", habitat)) %>%
+  group_by(year, method_habitat) %>%
+  summarize(consumption_live_t = sum(consumption_live_t), .grouos = "drop") %>%
+  mutate(prop_consumption = consumption_live_t / sum(consumption_live_t))
+```
+
