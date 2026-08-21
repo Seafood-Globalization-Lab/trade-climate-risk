@@ -1,0 +1,782 @@
+---
+title: "03_Results"
+author: "Connor Quiroz, Juliano Palacios-Abrantes, and  Jessica A. Gephart"
+date: "2026-05-11"
+output: html_document
+---
+
+# Load in packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+library(gtools)
+library(rstan)
+library(showtext)
+library(grid)
+
+
+# Set up global font family for plots
+# Register a specific static weight from the variable font file
+font_add(family = "Bahnschrift", regular = "/path/to/bahnschrift.ttf")
+showtext_auto()
+showtext_opts(dpi = 96)  # match whatever dpi your ggsave/rsvg pipeline uses
+
+# font_import()
+family = "Bahnschrift"
+
+# Set working directory for pulling in data easily path here
+setwd("C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/code")
+```
+
+# Load in functions
+```{r}
+source("../utils/create_map.R") ## For creating maps
+source("../utils/calculate_vulnerability.R") ## For calculating vulnerability
+source("../utils/calculate_simulated_vulnerability.R") ## For calculating simulated vulnerability (sensitivity analysis)
+# source("../utils/sens_sensitivity_analysis.R")  ## Sensitivity analysis on the sensitivity measure (FIXIT: work in progress)
+source("../utils/exp_sensitivity_analysis.R") ## Sensitivity analysis on the exposure measure
+source("../utils/sens_ac_sensitivity_analysis.R") ## Sensitivity analysis on the exposure measure
+source("../utils/number_unique_combs.R")  # Calculate the different unique combinations given the number of features (Used in sensitivity analysis)
+```
+
+# Instantiate plot themes
+
+```{r}
+# Shared base theme (mirrors theme_realm_panel style)
+theme_bar <- function(base_size = 8,
+                           axis_title_x = TRUE,
+                           axis_title_y = FALSE,
+                           legend       = TRUE) {
+  base <- theme_minimal(base_size = base_size) +
+    theme(
+      text                    = element_text(family = family),
+      plot.background         = element_rect(fill = "transparent", color = NA),
+      panel.background        = element_rect(fill = "transparent", color = NA),
+      panel.grid.minor        = element_blank(),
+      panel.grid.major.x = element_line(
+        color = scales::alpha("black", 0.3), linewidth = 0.15
+      ),
+      panel.grid.major.y = element_line(
+        color = scales::alpha("black", 0.06), linewidth = 0.15
+      ),
+      axis.text               = element_text(
+        size = base_size - 3, family = family
+        ),
+      axis.title.x            = element_text(
+        size  = base_size,
+        face  = "bold",
+        vjust = -0.5,
+        margin = margin(t = 4),
+        family = family
+      ),
+      axis.title.y            = element_blank(),
+      strip.text              = element_text(
+        size = base_size - 1, face = "bold", family = family, color = "black"
+        ),
+      legend.position         = if (legend) "bottom" else "none",
+      legend.title            = element_text(
+        size = base_size - 1, face = "bold", family = family
+        ),
+      legend.text             = element_text(
+        size = base_size - 2, family = family
+        ),
+      legend.key.size         = unit(0.3, "cm"),
+      legend.box              = "vertical",
+      legend.spacing          = unit(0.1, "cm"),
+      legend.margin           = margin(t = 1, b = 0),
+      legend.box.margin       = margin(t = -2, b = -2),
+      legend.background       = element_rect(fill = "transparent", color = NA),
+      legend.box.background   = element_rect(fill = "transparent", color = NA),
+      plot.margin             = margin(3, 3, 3, 3)
+    )
+
+  if (!axis_title_x) {
+    base <- base + theme(axis.title.x = element_blank())
+  }
+
+  base
+}
+```
+
+# Geographic contribution to climate vulnerability
+
+## Map of vulnerability
+
+```{r}
+# Continuous color scale
+calculate_vulnerability(e_s_ac) %>%
+  create_map(fill = "vulnerability", country.col.name = "consumer_iso3c") +
+  scale_fill_gradient2(
+    low = "#5E3C99",    # Purple — low vulnerability
+    mid = "#F7F7F7",    # Near-white — midpoint
+    high = "#E66101",   # Orange — high vulnerability
+    midpoint = 0,
+    name = "Climate vulnerability"
+  )
+  
+# discrete color scale
+
+# Create bounds that will be "low vulnerability", "moderate vulnerability",
+# and "high vulnerability"
+mod_vuln_lb <- vuln_df$vulnerability %>% quantile(0.33)
+high_vuln_lb <- vuln_df$vulnerability %>% quantile(0.66)
+
+calculate_vulnerability(e_s_ac) %>%
+  mutate(
+    vuln_type = case_when(
+      vulnerability <= mod_vuln_lb ~ "low vulnerability",
+      vulnerability >= mod_vuln_lb &
+        vulnerability <= high_vuln_lb ~ "moderate vulnerability",
+      vulnerability >= high_vuln_lb ~ "high vulnerability"
+    ),
+    vuln_type = factor(vuln_type, levels = c("low vulnerability",
+                                          "moderate vulnerability",
+                                          "high vulnerability"))
+  ) %>%
+  create_map(
+    fill = "vuln_type",
+    country.col.name = "consumer_iso3c"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "low vulnerability" = "#FFF3B0",
+      "moderate vulnerability" = "#F4A261",
+      "high vulnerability" = "#C44536"
+    ),
+    breaks = c(
+      "low vulnerability",
+      "moderate vulnerability",
+      "high vulnerability"
+    ),
+    labels = c(
+      "low climate vulnerability",
+      "moderate climate vulnerability",
+      "high climate vulnerability"
+    )
+  ) +
+  labs(fill = "") +
+  theme(legend.key.spacing.x = unit(1, "cm"))
+```
+
+## How much does sensitivity, exposure, and adaptive capacity contribute to the cliamte vulnerability?
+
+```{r load in bayesian 15sd gapfill}
+# Read in e/s/ac (full portfolio)
+e_s_ac <- read_csv("../output/e_s_ac/15_sd/e_s_ac_total_portfolio_bayesian_gapfill.csv")
+
+# Read in e/s/ac (just foreign imports)
+e_s_ac_foreign <- read_csv("../output/e_s_ac/15_sd/e_s_ac_total_portfolio_bayesian_gapfill_foreign.csv")
+
+# Calculate the percentage that foreign consumption contributes to the total exposure
+for_pct_contribution <- e_s_ac %>%
+  filter(scenario == "ssp126") %>%
+  left_join(
+    
+    e_s_ac_foreign %>%
+      filter(scenario == "ssp126") %>%
+      select(
+        consumer_iso3c,
+        pct_change
+        ),
+    by = c("consumer_iso3c")
+    
+  ) %>%
+  # Calculate exposure from domestic sources
+  mutate(domestic_prop_change = pct_change.x * 2 - pct_change.y,
+         foreign_prop_change = pct_change.y) %>% 
+  # Calculate the proportion contribution of the foreign exposure to the total exposure
+  mutate(foreign_prop_contribution = (abs(foreign_prop_change) / (abs(foreign_prop_change) + abs(domestic_prop_change))),
+         foreign_prop_contribution = round(foreign_prop_contribution, 1)) %>%
+  select(consumer_iso3c, foreign_prop_contribution)
+
+# Check to ensure that contribution ranges between 0 and 100%
+all(
+  for_pct_contribution$foreign_prop_contribution %>% round(1) %>% range() >= 0 &
+      for_pct_contribution$foreign_prop_contribution %>% round(1) %>% range() <= 1
+  )
+
+# Calculate vulnerability, adaptive capacity, sensitivity, and exposure
+# of foreign imports and domestic marine capture consumption
+vuln_df <- calculate_vulnerability(e_s_ac) %>%
+  # join on foreign contribution to total exposure
+  left_join(for_pct_contribution) %>%
+  mutate(foreign_exposure = exposure * foreign_prop_contribution,
+         domestic_exposure = exposure * (1 - foreign_prop_contribution)) %>%
+  mutate(adaptive_capacity = -adaptive_capacity) %>%
+  pivot_longer(cols = c(foreign_exposure, domestic_exposure, sensitivity, adaptive_capacity))
+
+# Helper to build a bar panel
+make_bar_panel <- function(regions,
+                           axis_x_label = FALSE,
+                           legend_show  = FALSE,
+                           text_size    = 4.75,
+                           mod_vuln_lb  = -0.57942,
+                           high_vuln_lb = -0.0830816) {
+
+  df <- vuln_df %>% filter(region %in% regions)
+
+  threshold_df <- tibble::tibble(
+    xintercept = c(mod_vuln_lb, high_vuln_lb),
+    threshold  = factor(c("Moderate vulnerability threshold",
+                           "High vulnerability threshold"),
+                         levels = c("Moderate vulnerability threshold",
+                                    "High vulnerability threshold"))
+  )
+
+  ggplot(df) +
+    geom_col(aes(x = value, y = fct_reorder(consumer_iso3c, -vulnerability), fill = name)) +
+    geom_vline(data = threshold_df,
+               aes(xintercept = xintercept, linetype = threshold),
+               color = "grey30", linewidth = 0.4) +
+    geom_point(aes(x = vulnerability, y = consumer_iso3c, color = "hi"), shape = 21,
+               fill = "grey20", size = 1.2, stroke = 0.3) +
+    scale_linetype_manual(
+      name   = "",
+      values = c("Moderate vulnerability threshold" = "dotted",
+                 "High vulnerability threshold"      = "dashed")
+    ) +
+    scale_fill_manual(
+      values = c(
+        "domestic_exposure" = "#C44E52",
+        "foreign_exposure"  = "#E6A23C",
+        "sensitivity"       = "#756BB1",
+        "adaptive_capacity" = "#4C9F9A"
+      ),
+      labels = c(
+        "domestic_exposure" = "Exposure (domestic consumption)",
+        "foreign_exposure"  = "Exposure (foreign consumption)",
+        "sensitivity"       = "Sensitivity",
+        "adaptive_capacity" = "Adaptive Capacity"
+      )
+    ) +
+    labs(x = "Index value", y = "", fill = "Index", color = "") +
+    facet_wrap(~ region, scales = "free_y", nrow = 1) +
+    theme_bar(axis_title_x = axis_x_label, legend = legend_show) +
+    scale_color_manual(
+      values = "white",
+      label = "Climate vulnerability",
+      guide = guide_legend(
+        order = 2,
+        override.aes = list(
+          fill = list(
+            pattern(
+              grobTree(circleGrob(x = 0.5, y = 0.5, r = 0.3, gp = gpar(fill = "grey20"))),
+              extend = "repeat",
+              gp = gpar(col = "grey20", fill = "white", lwd = 0.25)
+            )
+          ),
+          color = "grey20",
+          linewidth = 0.2,
+          size = 3.5
+        )
+      )
+    )
+}
+
+
+# Build panels - they are separated into two rows because including all in one
+# would make the countries too small to see
+all_regions   <- unique(vuln_df$region)
+top_regions   <- all_regions[!all_regions %in% c("Oceania", "South America")]
+bot_regions   <- c("Oceania", "South America")
+
+# Top row of bars (i.e.. North America, Asia, Africa, Europe)
+top_row <- make_bar_panel(
+  top_regions,
+  axis_x_label = FALSE,
+  legend_show = FALSE,
+  text_size = 4.75) +
+  theme(plot.margin = margin(t = 0,  # Top margin
+                             r = 5,  # Right margin
+                             b = 0,  # Bottom margin
+                             l = 5))
+
+# Top row of bars (i.e.. Africa and Oceania)
+bottom_row <- make_bar_panel(
+  bot_regions,
+  axis_x_label = TRUE,
+  legend_show = TRUE,
+  text_size = 5.15)
+
+# Since there are less plots in the bottom row, add spacers in to make
+# the aspect ratio of the bottom plots look similar in size to the top plots
+bottom_row_narrowed <- cowplot::plot_grid(
+  NULL, bottom_row, NULL,
+  ncol       = 3,
+  rel_widths = c(0.1, 0.3, 0.1)
+) %>% suppressWarnings()
+
+# combine the bottom and top bar plots (this will make up the bottom panel of
+# the plot)
+(final_plot <- cowplot::plot_grid(
+  top_row,
+  bottom_row_narrowed,
+  nrow        = 2,
+  rel_heights = c(2, 1.25)
+) %>%
+  suppressWarnings())
+
+# Save plot
+ggsave(
+  filename = "../images/contribution_to_vulnerability.pdf",
+  plot     = final_plot,
+  device   = cairo_pdf,
+  width    = 8,
+  height   = 6
+)
+```
+
+## What proportion of regions' consumption is consumed from for/dom and what proportion of that is projected to increase / decrease in catch?
+
+```{r}
+# Load in gap filled consumption data
+proj_consumption <- read_parquet("../output/consumption_projections_gap_filled/bayesian/15_sd/consumption_projections_gap_filled_total_portfolio_unweighted_bayesian_gapfill.parquet")
+
+# Proportion of regions consumption contributed to climate vulnerability
+prop_for_dom_region <- proj_consumption %>%
+  group_by(region, consumption_type) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  group_by(region) %>%
+  mutate(prop_for_dom = live_weight_t / sum(live_weight_t)) %>%
+  select(region, consumption_type, prop_for_dom)
+
+# What proportion of regions' for/dom is projected to increase / decrease
+# in catch?
+prop_exposed <- proj_consumption %>%
+  mutate(is_exposed = ssp126 < 0) %>%
+  group_by(region, consumption_type, is_exposed) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  drop_na(is_exposed) %>%
+  group_by(region, consumption_type) %>%
+  mutate(prop_is_exposed = live_weight_t / sum(live_weight_t))  %>%
+  left_join(prop_for_dom_region)
+
+# Prepare data for the alluvial plot
+sankey_data <- prop_exposed %>%
+  mutate(
+    source = case_when(
+      consumption_type == "domestic" ~ "Domestic",
+      consumption_type == "foreign"  ~ "Foreign"
+    ),
+    exposure = if_else(is_exposed, "Decrease", "Increase"),
+    region = factor(
+      region,
+      levels = c("Africa", "Asia", "Europe", "North America", "Oceania", "South America")
+    ),
+    source = factor(source, levels = c("Domestic", "Foreign")),
+    exposure = factor(exposure, levels = c("Decrease", "Increase"))
+  ) %>%
+  group_by(region) %>%
+  mutate(
+    region_total_t = sum(live_weight_t),          # keep the real total for labelling
+    y_plot = live_weight_t / region_total_t        # each region now sums to 1
+  ) %>%
+  ungroup()
+
+sankey_data <- sankey_data %>%
+  group_by(region) %>%
+  mutate(region_label = paste0(
+    as.character(region), "\n(",
+    scales::label_number(scale = 1e-6, suffix = " Mt", accuracy = 0.1)(first(region_total_t)),
+    ")"
+  )) %>%
+  ungroup() %>%
+  mutate(region_fill = region)
+
+sankey_long <- to_lodes_form(
+  sankey_data,
+  axes = c("region", "source", "exposure"),
+  id = "alluvium"
+)
+
+# Publication-friendly colour palette
+region_cols <- c(
+  "Africa" = "#741A32",
+  "Asia" = "#B34232",
+  "Europe" = "#D38F35",
+  "North America" = "#D4B95F",
+  "Oceania" = "#4FA2A2",
+  "South America" = "#114F59"
+  
+)
+
+
+ggplot(
+  sankey_long,
+  aes(x = x, stratum = stratum, alluvium = alluvium, y = y_plot, fill = region_fill)
+) +
+  geom_flow(
+    width = 0.18,
+    alpha = 0.65,
+    colour = "white",     # thin white border instead of NA — invisible against white background
+    linewidth = 0.1,
+    aes.bind = "flows"
+  ) +
+  geom_stratum(width = 0.23, fill = "white", colour = "grey30", linewidth = 0.35) +   # was 0.18
+geom_text(stat = "stratum", aes(label = str_wrap(after_stat(stratum), width = 10)), size = 3.2) +
+  scale_x_discrete(
+    limits = c("region", "source", "exposure"),
+    labels = c("Region", "Consumption source", "Projected percent\nchange in catch"),
+    expand = c(0.08, 0.08)
+  ) +
+  scale_fill_manual(values = region_cols) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 11, colour = "black", margin = margin(t = 8)),
+    axis.text.y = element_blank(),
+    legend.position = "none",
+    plot.margin = margin(10, 20, 10, 10)
+  ) +
+labs(x = "", y = "")
+```
+
+# Taxa contribution to vulnerability
+
+## See what proportion of countries' consumption is exposed and not exposed
+
+```{r}
+# Load in gap filled consumption data
+proj_consumption <- read_parquet("../output/consumption_projections_gap_filled/bayesian/15_sd/consumption_projections_gap_filled_total_portfolio_unweighted_bayesian_gapfill.parquet")
+
+# Get the % change in catch by species
+proj_change <- proj_consumption %>%
+  distinct(sciname, eez_iso3c, ssp126)
+
+proj_consumption %>%
+  group_by(consumer_iso3c, sciname, eez_iso3c) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  left_join(proj_change) %>%
+  mutate(is_exposed = ssp126 < 0) %>%
+  group_by(consumer_iso3c, is_exposed) %>%
+  drop_na() %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  group_by(consumer_iso3c) %>%
+  mutate(perc_exposed = (live_weight_t / sum(live_weight_t)) * 100) %>%
+  filter(is_exposed == TRUE) %>%
+  create_map(fill = "perc_exposed", country.col.name = "consumer_iso3c") +
+  labs(fill = "Percentage of consumption\nwith projected\ndeclines in catch ") +
+  scale_fill_gradient2(low = "#FFF3B0",
+                       mid = "#F4A261",
+                       high = "#C44536",
+                       midpoint = 50,
+                       labels = scales::label_percent(scale = 1)) +
+  theme(legend.text = element_text(size = 8),
+        legend.title = element_text(hjust = 0.5))
+```
+
+
+## See global top species and whether they are "exposed" or "not"
+
+```{r}
+proj_consumption <- read_parquet("../output/consumption_projections_gap_filled/bayesian/15_sd/consumption_projections_gap_filled_total_portfolio_unweighted_bayesian_gapfill.parquet")
+
+# Check globally
+# Get the pct_change by sciname
+proj_change <- proj_consumption %>%
+  distinct(sciname, eez_iso3c, ssp126)
+
+# Find the top 5 taxa consumed
+top_10_species_consumed <- proj_consumption %>%
+  group_by(sciname) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  top_n(5) %>%
+  pull(sciname)
+
+# # For each species, calculate the proportion that one species is consumed
+  # out of the top five species
+prop_cons <- proj_consumption %>%
+  group_by(sciname) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  top_n(5) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  select(sciname, prop_consumption)
+
+# See which EEZ
+proj_consumption %>%
+  group_by(sciname, eez_iso3c) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  left_join(proj_change) %>%
+  filter(sciname %in% top_10_species_consumed) %>%
+  mutate(is_exposed = ssp126 < 0) %>%
+  group_by(sciname, is_exposed) %>%
+  summarize(live_weight_t = sum(live_weight_t)) 
+
+# See the proportion that countries' species are exposed or aren't exposed
+proj_consumption %>%
+  group_by(sciname, eez_iso3c) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  left_join(proj_change) %>%
+  filter(sciname %in% top_10_species_consumed) %>%
+  mutate(is_exposed = ssp126 < 0) %>%
+  group_by(sciname, is_exposed) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  group_by(sciname) %>%
+  mutate(prop_exposed = live_weight_t / sum(live_weight_t)) %>%
+  # Join on consumption props by species (from prop_cons)
+  left_join(prop_cons) %>%
+  mutate(
+    exposure = if_else(is_exposed, "Exposed", "Not exposed"),
+    # Amount of total consumption flowing into each exposure category
+    flow = prop_consumption * prop_exposed
+  ) %>%
+
+ggplot(
+  aes(
+    axis1 = sciname,
+    axis2 = exposure,
+    y = flow
+  )
+) +
+  geom_alluvium(
+    aes(fill = exposure),
+    width = 0.15,
+    alpha = 0.7
+  ) +
+  geom_stratum(
+    width = 0.15,
+    fill = "grey90",
+    color = "grey30"
+  ) +
+  geom_text(
+    stat = "stratum",
+    aes(label = after_stat(stratum)),
+    size = 3
+  ) +
+  scale_y_continuous(
+    labels = percent_format()
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Exposed" = "#D55E00",
+      "Not exposed" = "#0072B2"
+    )
+  ) +
+  labs(
+    x = NULL,
+    y = "Proportion of total consumption",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid = element_blank()
+  )
+```
+
+```{r}
+proj_consumption <- read_parquet("../output/consumption_projections_gap_filled/bayesian/15_sd/consumption_projections_gap_filled_total_portfolio_unweighted_bayesian_gapfill.parquet")
+
+# Check globally
+# Get the pct_change by sciname
+proj_change <- proj_consumption %>%
+  distinct(sciname, region, eez_iso3c, ssp126)
+
+# Find the top 5 taxa consumed
+top_taxa_consumed <- proj_consumption %>%
+  group_by(region, sciname) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  arrange(region, desc(live_weight_t), sciname) %>%
+  group_by(region) %>%
+  slice_head(n = 2) %>%
+  ungroup() %>%
+  select(region, sciname)  
+
+# # For each species, calculate the proportion that one species is consumed
+  # out of the top five species
+prop_cons <- proj_consumption %>%
+  group_by(region, sciname) %>%
+  filter(sciname %in% top_taxa_consumed) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  select(region, sciname, prop_consumption)
+
+# See the proportion that countries' species are exposed or aren't exposed
+sankey_data <- proj_consumption %>%
+  group_by(region, sciname, eez_iso3c) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  left_join(proj_change) %>%
+  semi_join(top_taxa_consumed, by = c("region", "sciname")) %>%   # <-- was filter(sciname %in% ...)
+  mutate(is_exposed = ssp126 < 0) %>%
+  group_by(region, sciname, is_exposed) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  group_by(region, sciname) %>%
+  mutate(prop_exposed = live_weight_t / sum(live_weight_t)) %>%
+  left_join(prop_cons) %>%
+  mutate(
+    exposure = if_else(is_exposed, "Decrease", "Increase"),
+    flow = prop_consumption * prop_exposed
+  )
+
+region_cols <- c(
+  "Africa" = "#741A32",
+  "Asia" = "#B34232",
+  "Europe" = "#D38F35",
+  "North America" = "#D4B95F",
+  "Oceania" = "#4FA2A2",
+  "South America" = "#114F59"
+)
+
+sankey_data <- sankey_data %>%
+  mutate(
+    region = factor(
+      region,
+      levels = c("Africa", "Asia", "Europe", "North America", "Oceania", "South America")
+    ),
+    region_fill = region      # duplicate BEFORE melting, so it survives to_lodes_form()
+  ) %>%
+  arrange(region, sciname, exposure)   # controls sub-ribbon stacking, avoids crossing artifacts
+
+sankey_long <- to_lodes_form(
+  sankey_data,
+  axes = c("region", "sciname", "exposure"),
+  id = "alluvium"
+)
+
+final_plot <- ggplot(
+  sankey_long,
+  aes(x = x, stratum = stratum, alluvium = alluvium, y = flow, fill = region_fill)
+) +
+  geom_flow(
+    width = 0.18,
+    alpha = 0.65,
+    colour = "white",
+    linewidth = 0.1,
+    aes.bind = "flows"
+  ) +
+  geom_stratum(width = 0.23, fill = "white", colour = "grey30", linewidth = 0.35) +
+  geom_text(
+    stat = "stratum",
+    aes(label = str_wrap(after_stat(stratum), width = 10)),
+    size = 3.2
+  ) +
+  scale_x_discrete(
+    limits = c("region", "sciname", "exposure"),
+    labels = c("Region", "Top taxa conusmed", "Projected percent\nchange in catch"),
+    expand = c(0.08, 0.08)
+  ) +
+  scale_fill_manual(values = region_cols) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 11, colour = "black", margin = margin(t = 8)),
+    axis.text.y = element_blank(),
+    legend.position = "none",
+    plot.margin = margin(10, 20, 10, 10)
+  ) +
+  labs(x = "", y = "")
+
+# Save plot
+ggsave(
+  filename = "../images/sankey_region_species.pdf",
+  plot     = final_plot,
+  device   = cairo_pdf,
+  width    = 12,
+  height   = 11
+)
+```
+
+# Where are these species primarily coming from?
+
+```{r}
+top_taxa_consumed <- top_species_consumed %>%
+  pull(sciname)
+
+species_eez_data <- proj_consumption %>%
+  filter(sciname %in% top_taxa_consumed) %>%
+  group_by(sciname, eez_iso3c) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  arrange(-live_weight_t) %>%
+  group_by(sciname) %>%
+  slice_head(n = 2) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  ungroup() %>%
+  mutate(sciname_fill = sciname) %>%      # duplicate BEFORE melting, so it survives to_lodes_form()
+  arrange(sciname, desc(prop_consumption))
+
+
+species_eez_long <- to_lodes_form(
+  species_eez_data,
+  axes = c("sciname", "eez_iso3c"),
+  id = "alluvium"
+)
+
+# Sanity check before plotting
+species_eez_long %>% filter(is.na(stratum) | is.na(prop_consumption)) %>% nrow()  # should be 0
+artis_
+# Colour palette — one colour per species (swap for your preferred palette)
+species_cols <- c(
+  "actinopterygii" = "#741A32",
+  "dosidicus gigas" = "#A83B32",
+  "engraulis japonicus" = "#C87534",
+  "engraulis ringens" = "#D3A349",
+  "gadus chalcogrammus" = "#A7B175",
+  "macruronus novaezelandiae" = "#449495",
+  "sardina pilchardus" = "#114F59"
+  # add remaining species here
+)
+
+final_plot <- ggplot(
+  species_eez_long,
+  aes(x = x, stratum = stratum, alluvium = alluvium, y = prop_consumption, fill = sciname_fill)
+) +
+  geom_flow(width = 0.18, alpha = 0.65, colour = "white", linewidth = 0.1, aes.bind = "flows") +
+  geom_stratum(width = 0.23, fill = "white", colour = "grey30", linewidth = 0.35) +
+  # Species labels: default centered behavior, no hjust override
+  geom_text(
+    data = species_eez_long %>% filter(x == "sciname"),
+    stat = "stratum",
+    aes(label = str_wrap(after_stat(stratum), width = 12)),
+    size = 3.2
+  ) +
+  # EEZ labels: pushed right, outside the block, to avoid overlap on small strata
+  geom_text(
+    data = species_eez_long %>% filter(x == "eez_iso3c"),
+    stat = "stratum",
+    aes(label = after_stat(stratum)),
+    size = 3.2,
+    hjust = -0.15
+  ) +
+  scale_x_discrete(
+    limits = c("sciname", "eez_iso3c"),
+    labels = c("Top species", "EEZ"),
+    expand = c(0.1, 0.18)   # less padding on left (species side), more on right (EEZ side)
+  ) +
+  scale_fill_manual(values = species_cols) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 11, colour = "black", margin = margin(t = 8)),
+    axis.text.y = element_blank(),
+    legend.position = "none",
+    plot.margin = margin(10, 40, 10, 10)   # extra room on the right for outward EEZ labels
+  ) +
+  labs(x = "", y = "")
+
+# Save plot
+ggsave(
+  filename = "../images/sankey_species_eez.pdf",
+  plot     = final_plot,
+  device   = cairo_pdf,
+  width    = 12,
+  height   = 11
+)
+```
+
