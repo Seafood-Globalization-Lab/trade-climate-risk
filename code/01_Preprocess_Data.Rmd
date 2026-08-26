@@ -161,10 +161,10 @@ preprocess_climate_data <- function(dir) {
     summarize(ssp126 = sum(ssp126),
              ssp585 = sum(ssp585))
   
-  write_csv(df, "../data/exposure/mcp_sovereign.csv")
+  write_csv(mcp_sovereign, "../data/exposure/mcp_sovereign.csv")
   message("✅ mcp_sovereign.csv written to ../data/exposure")
 
-  invisible(df)
+  invisible(mcp_sovereign)
 }
 ```
 
@@ -1376,8 +1376,8 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
   file_names <- readRDS("../data/exposure/utils/file_names.rds")
   species_names <- readRDS("../data/exposure/utils/species_names.rds")
   
-  ## Read in Juliano's mcp data
-  climate_by_spp_eez <- read_csv("../output/future_catch_data_joined/future_catch_joined.csv", show_col_types = FALSE)
+  ## Read in Juliano's mcp data (catch projections for each sovereign EEZ)
+  mcp_sovereign <- read_csv("../data/exposure/mcp_sovereign.csv", show_col_types = FALSE)
   
   # File integrity diagnostics of Juliano's climate data
   
@@ -1396,7 +1396,7 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
   })
   
   # File has data, but no accompanying species key
-  data_but_no_key <- climate_by_spp_eez %>%
+  data_but_no_key <- mcp_sovereign %>%
     filter(is.na(sciname)) %>%
     group_by(sciname) %>%
     distinct(file_found_in)
@@ -1468,7 +1468,7 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
   ## data with EEZs
   
   ## Read in Juliano's mcp data
-  climate_by_spp_eez <- climate_by_spp_eez %>%
+  mcp_sovereign <- mcp_sovereign %>%
     select(-file_found_in) %>%
     drop_na()
   
@@ -1576,7 +1576,7 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
   correction_lookups <- setNames(corrections, unaligned_names %>% str_to_lower())
   
   ##### Create data separate data frame
-  climate_by_spp_eez_corrected <- climate_by_spp_eez %>%
+  climate_by_spp_eez_corrected <- mcp_sovereign %>%
   mutate(sciname = ifelse(
     sciname %in% names(correction_lookups),
     correction_lookups[sciname],
@@ -1586,7 +1586,7 @@ ecoregion_full <- read.csv("../data/exposure/gap_filling/spatially_joined_ecoreg
 
   ## Problem: mcp data has (1) updated taxa names; and (2) out of date taxa names
   ### Combine Juliano's pre and post-corrected naming data.
-  climate_by_spp_eez_combined <- bind_rows(climate_by_spp_eez, climate_by_spp_eez_corrected) %>%
+  climate_by_spp_eez_combined <- bind_rows(mcp_sovereign, climate_by_spp_eez_corrected) %>%
     group_by(eez_iso3c, sciname) %>%
     summarise(across(c(ssp126, ssp585), ~mean(.x, na.rm = TRUE))) %>%
     ungroup()
