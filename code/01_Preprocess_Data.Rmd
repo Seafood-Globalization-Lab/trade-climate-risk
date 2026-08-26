@@ -45,7 +45,7 @@ final joined dataset to `../output/`.
 
 ---
 
-# Step 1 — Climate data preprocessing (run once)
+# Step 1 — Catch proejection data preprocessing (run once)
 
 Reads all DBEM species files, joins species names, converts EEZ strings to
 ISO3C codes, and writes a single joined CSV. Because this step is
@@ -62,56 +62,110 @@ preprocess_climate_data <- function(dir) {
 
   species_names <- fread(paste0(dir, "exposure/dbem_spp_list.csv"))
 
-
-  df <- map_dfr(file_names, function(f) {
+  # Extract SeaAroundUS (Juliano's; SAU) data across folders and combine into
+  # one file
+  mcp_combined <- map_dfr(file_names, function(f) {
     df_i <- fread(f)
     if (nrow(df_i) == 0) return(NULL)
 
     df_i %>%
       left_join(species_names, by = "taxon_key") %>%
-      mutate(taxon_name = str_to_lower(taxon_name),
-             # variable that stores which file name X species was found in
-             # (will be used to ensure that species are found in their correct
-             # file names and not multiple files)
-             file_found_in = as.numeric(sub(".*_(\\d+)\\.csv$", "\\1", f))) %>% 
-      select(taxon_name, eez_name, ssp, mean_mcp_delta_2030, file_found_in) %>%
+      mutate(taxon_name = str_to_lower(worms_name)) %>% 
+      select(taxon_name, eez_name, ssp, mean_mcp_delta_2030) %>%
       pivot_wider(names_from = ssp, values_from = mean_mcp_delta_2030, values_fn = mean)
   })
   
-  # Save files to .RDS (for quality checks) FIXIT - maybe delete later
-  saveRDS(file_names, "../data/exposure/utils/file_names.rds")
-  saveRDS(species_names, "../data/exposure/utils/species_names.rds")
-
-  # Recode EEZ territory strings to ISO3C — territories are assigned to their
-  # sovereign nation
-  df <- df %>%
+  # Problem: SAUC catch projections contain information at
+  # sub-sovereign EEZ level (for example, Russia (Kara Sea)) — we want
+  # to aggregate EEZ projections across sub-eez names. To aggregate 
+  # EEZ projections, we will take a weighted average of the projections
+  # multiplied byt each sub-EEZ's production weight, another SAU data source
+    
+  # setDTthreads(1) # this was for faster file reading initially when using 
+  # fread to load in the .csv, but we converted to .parquet
+  
+  # Read in production data by EEZ
+  sau_prod <-read_parquet("../data/miscellaneous/sau_prod.parquet")
+  
+  # Calculate production totals by EEZ
+  prod_totals <- sau_prod %>%
+    group_by(eez) %>%
+    summarize(total_production = sum(sum)) %>%
+    rename(eez_name = eez) %>%
+    # Correct specific cases to enable joins on catch projection data
+    # Ask Juliano about Greece - his data names are "Greece" and "Crete (Greece)"
+    # The SAU data only recognizes "Crete (Greece)" and "Greece (without Crete)"
+    # Does your "Greece" not include Crete?
     mutate(eez_name = case_when(
-      eez_name == "Tokelau (New Zealand)"              ~ "NZL",
-      eez_name == "Svalbard Isl. (Norway)"             ~ "NOR",
-      eez_name == "Chagos Archipelago (UK)"            ~ "GBR",
-      eez_name == "Christmas Isl. (Australia)"         ~ "AUS",
-      eez_name == "High seas"                          ~ "NEI",
-      eez_name == "Iran (Sea of Oman)"                 ~ "IRN",
-      eez_name == "Mayotte (France)"                   ~ "FRA",
-      eez_name == "Mozambique Channel Isl. (France)"   ~ "FRA",
-      eez_name == "New Caledonia (France)"             ~ "FRA",
-      eez_name == "Norfolk Isl. (Australia)"           ~ "AUS",
-      eez_name == "Réunion (France)"                   ~ "FRA",
-      eez_name == "Saudi Arabia (Persian Gulf)"        ~ "SAU",
-      eez_name == "Wallis & Futuna Isl. (France)"      ~ "FRA",
-      eez_name == "Yemen (Arabian Sea)"                ~ "YEM",
-      TRUE ~ countrycode(eez_name, origin = "country.name", destination = "iso3c")
+      
+      eez_name == "Greece (without Crete)" ~ "Greece",
+      TRUE ~ eez_name
+      
+    ))
+  
+  # Clean up EEZ names
+  mcp_clean <- mcp_combined %>%
+    mutate(
+      eez_iso3c = case_when(
+        eez_name == "Chagos Archipelago (UK)"            ~ "GBR",
+        eez_name == "Christmas Isl. (Australia)"         ~ "AUS",
+        eez_name == "High seas"                          ~ "NEI",
+        eez_name == "Iran (Sea of Oman)"                 ~ "IRN",
+        eez_name == "Mozambique Channel Isl. (France)"   ~ "FRA",
+        eez_name == "Mayotte (France)"                   ~ "FRA",
+        eez_name == "New Caledonia (France)"             ~ "FRA",
+        eez_name == "Norfolk Isl. (Australia)"           ~ "AUS",
+        eez_name == "Réunion (France)"                   ~ "FRA",
+        eez_name == "Saudi Arabia (Persian Gulf)"        ~ "SAU",
+        eez_name == "Svalbard Isl. (Norway)"             ~ "NOR",
+        eez_name == "Tokelau (New Zealand)"              ~ "NZL",
+        eez_name == "Wallis & Futuna Isl. (France)"      ~ "FRA",
+        eez_name == "Yemen (Arabian Sea)"                ~ "YEM",
+        TRUE ~ countrycode(
+          eez_name, origin = "country.name", destination = "iso3c"
+          ))) %>%
+    # Get rid of NEI (not elsewhere included EEZ's) - won't be used in analysis
+    filter(eez_iso3c != "NEI")
+  
+  
+  # Calculate the proportion of production for each sub-eez name within each
+  # sovereign EEZ (used for weighted averaging)
+  prod_props_eez <- mcp_clean %>%
+    distinct(eez_name, eez_iso3c) %>%
+    left_join(prod_totals, by = "eez_name") %>%
+    # The join will result in NA catch projection values for Ecuador.
+    # This doesn't matter though because Ecuador has no sub-eez names in the
+    # catch projection data, so we do not need to weighted average any of its
+    # values and thus will impute 1, otherwise leave the values unchanged
+    mutate(total_production = case_when(
+      eez_name == "Ecuador" ~ 1,
+      TRUE ~ total_production
     )) %>%
-    rename(eez_iso3c = eez_name, sciname = taxon_name)
-
-  write_csv(df, "../output/future_catch_data_joined/future_catch_joined.csv")
-  message("✅ future_catch_joined.csv written to ../output/")
+    # Workflow for calculating weighted averages:
+    # Calculate the proportion of production for each sub-eez within a
+    # sovereign EEZ
+    group_by(eez_iso3c) %>%
+    mutate(prop_prod = total_production / sum(total_production)) %>%
+    ungroup() %>%
+    select(eez_name, prop_prod)
+  
+  # Join production proportions at sub-eez level onto catch projection data,
+  # calculating the weighted average at the sovereign level - this will be the
+  # data we use for exposure
+  mcp_sovereign <- mcp_clean %>%
+    left_join(prod_props_eez, by = "eez_name") %>%
+    # Calculate weighted averages for catch projections for each sovereign EEZ
+    mutate(ssp126 = ssp126 * prop_prod,
+           ssp585 = ssp585 * prop_prod) %>%
+    group_by(taxon_name, eez_iso3c) %>%
+    summarize(ssp126 = sum(ssp126),
+             ssp585 = sum(ssp585))
+  
+  write_csv(df, "../data/exposure/mcp_sovereign.csv")
+  message("✅ mcp_sovereign.csv written to ../data/exposure")
 
   invisible(df)
 }
-
-# FIXIT: find some way to get soverign country out of string
-# dplyr::mutate(!!country_col_name := stringr::str_remove(.data[[country_col_name]], "\\(.+\\)$")) 
 ```
 
 ---
