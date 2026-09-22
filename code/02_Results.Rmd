@@ -1,0 +1,449 @@
+---
+title: "01 — Climate Risk Analysis"
+author: "Connor Quiroz, Juliano Palacios-Abrantes, and  Jessica A. Gephart"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+library(gtools)
+library(here)
+library(showtext)
+
+
+# Set up global font family for plots
+# Register a specific static weight from the variable font file
+font_add(family = "Bahnschrift", regular = "/path/to/bahnschrift.ttf")
+showtext_auto()
+showtext_opts(dpi = 96)  # match whatever dpi your ggsave/rsvg pipeline uses
+
+# font_import()
+family = "Bahnschrift"
+```
+
+# Objectives
+
+This notebook:
+
+1. Runs `01_Analysis.Rmd` to load all data-building functions into the
+   environment.
+2. Builds E/S/AC datasets for two portfolio types: a country's **foreign
+   imports** and its **entire consumption** portfolio.
+3. Calculates climate risk for each portfolio.
+4. Runs a sensitivity analysis on adaptive capacity components *(work in
+   progress)*.
+
+---
+
+# Setup
+
+> **User input:** Set `file_path` to the root of your input data folder.
+> Everything else runs automatically.
+
+## Calculate the risk index based on a country’s exposure, sensitivity, and adaptive capacity components.
+
+```{r load-working-directory-and-functions}
+# Set working directory for pulling in data easily path here
+# setwd("C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/code")
+
+## Connor's laptop path
+file_path <- "C:/Users/cjqui/Desktop/SGL/Chapter 2 (trade climate risk)/trade-climate-risk/data/"
+
+# Knitting 00_Preprocess_Data.Rmd loads all helper functions for generating the exposure, sensitiviyty, adaptive capacity.
+knitr::knit("01_Analysis.Rmd", output = tempfile())
+
+
+# Load helper scripts
+sapply(
+  list.files(file.path("../utils"),
+             pattern = "\\.R$",
+             full.names = TRUE,
+             recursive = TRUE),
+  source
+) %>%
+  invisible()
+```
+
+---
+
+# Check gap filled consumption data coverage
+
+```{r}
+consumption_gap_filled_1 <- read_parquet(
+  "../output/consumption_catch_proj_gap_filled/1_species/consumption_total_portfolio_unweighted_diagonal_gapfill.parquet")
+
+consumption_gap_filled_2 <- read_parquet(
+  "../output/consumption_catch_proj_gap_filled/2_species/consumption_total_portfolio_unweighted_diagonal_gapfill.parquet")
+
+consumption_gap_filled_5 <- read_parquet(
+  "../output/consumption_catch_proj_gap_filled/5_species/consumption_total_portfolio_unweighted_diagonal_gapfill.parquet")
+
+consumption_gap_fills <- list(
+  consumption_gap_filled_1,
+  consumption_gap_filled_2,
+  consumption_gap_filled_5
+)
+
+species_gap_fills <- c("1 species","2 species", "5 species")
+
+for (i in seq_along(species_gap_fills)) {
+  
+  data <- consumption_gap_fills[[i]]
+  
+  plot <- data %>%
+  mutate(gapfill_method = case_when(
+    !(gapfill_method == "Gapfill not needed" |
+      gapfill_method == "Unsuccessful gapfill") ~
+      substring(gapfill_method, first = 1, last = nchar(gapfill_method)-8),
+    TRUE ~ gapfill_method
+  )) %>%
+  mutate(gapfill_performed = paste0(gapfill_method, ", ", gapfill_level),
+         gapfill_performed = case_when(
+           gapfill_performed ==
+             "Gapfill not needed, Gapfill not needed" ~ "Gapfill not needed",
+           gapfill_performed ==
+             "Unsuccessful gapfill, Unsuccessful gapfill" ~
+             "Unsuccessful gapfill",
+           TRUE ~ gapfill_performed
+           )) %>%
+  group_by(gapfill_performed) %>%
+  summarize(live_weight_t = sum(live_weight_t), .groups = "drop") %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  mutate(gapfill_performed = factor(
+    gapfill_performed, levels = c(
+      "Gapfill not needed",
+      "eez, genus", "eez, family", "realm, genus",
+      "eez, order", "realm, family", "region, genus",
+      "eez, class", "realm, order", "region, family",
+      "global, genus", "eez, phylum", "realm, class",
+      "region, order", "global, family", "eez, kingdom",
+      "realm, phylum", "region, class", "global, order",
+      "realm, kingdom", "region, phylum", "global, class",
+      "region, kingdom", "global, phylum", "global, kingdom",
+      "Unsuccessful gapfill")
+  )) %>%
+  ggplot(
+  aes(
+    x = 100 * prop_consumption,
+    y = fct_rev(gapfill_performed)
+  )
+) +
+  geom_col(
+    fill = "#3182BD",
+    width = 0.7
+  ) +
+  geom_text(
+    aes(label = paste0(round(100 * prop_consumption, 1), "%")),
+    hjust = -0.15,
+    fontface = "bold",
+    size = 3.5
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  labs(
+    x = "Percentage of ARTIS consumption accounted for",
+    y = "Gapfill performed",
+    title = paste0(species_gap_fills[i], " minimum")
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+print(plot)
+  
+}
+
+rm(consumption_gap_filled_1,consumption_gap_filled_2.
+   consumption_gap_filled_5, consumption_gap_fills, data)
+```
+
+# Map out values on continuous & discrete color scale
+
+```{r}
+vuln_1 <- calculate_vulnerability(portfolio = "total_portfolio",
+                                  dir = file_path,
+                                  gap_filling_method = "diagonal",
+                                  averaging = "unweighted",
+                                  num_species = 1,
+                                  drop_na = TRUE
+                                  )
+
+vuln_2 <- calculate_vulnerability(portfolio = "total_portfolio",
+                                  dir = file_path,
+                                  gap_filling_method = "diagonal",
+                                  averaging = "unweighted",
+                                  num_species = 2,
+                                  drop_na = TRUE
+                                  )
+
+vuln_5 <- calculate_vulnerability(portfolio = "total_portfolio",
+                                  dir = file_path,
+                                  gap_filling_method = "diagonal",
+                                  averaging = "unweighted",
+                                  num_species = 5,
+                                  drop_na = TRUE
+                                  )
+# Continuous color scale
+vuln_1 %>% create_map(fill = "exposure", country.col.name = "consumer_iso3c")
+vuln_2 %>% create_map(fill = "exposure", country.col.name = "consumer_iso3c")
+vuln_5 %>% create_map(fill = "exposure", country.col.name = "consumer_iso3c")
+
+
+# Discrete color scale
+vuln_dfs <- list(vuln_1, vuln_2, vuln_5)
+
+species_gap_fills <- c("1 species","2 species", "5 species")
+
+
+for (i in seq_along(species_gap_fills)) {
+  
+  vuln_df <- vuln_dfs[[i]]
+
+  
+
+  # Create bounds that will be "low vulnerability", "moderate vulnerability",
+  # and "high vulnerability"
+mod_vuln_lb <- vuln_df$exposure %>% quantile(0.33)
+  high_vuln_lb <- vuln_df$exposure %>% quantile(0.66)
+  
+  plot <- vuln_df %>%
+    mutate(
+      vuln_type = case_when(
+        exposure <= mod_vuln_lb ~ "low exposure",
+        exposure >= mod_vuln_lb &
+          exposure <= high_vuln_lb ~ "moderate exposure",
+        exposure >= high_vuln_lb ~ "high exposure"
+      ),
+      vuln_type = factor(vuln_type, levels = c("low exposure",
+                                            "moderate exposure",
+                                            "high exposure"))
+    ) %>%
+    create_map(
+      fill = "vuln_type",
+      country.col.name = "consumer_iso3c"
+    ) +
+    scale_fill_manual(
+      values = c(
+        "low exposure" = "#FFF3B0",
+        "moderate exposure" = "#F4A261",
+        "high exposure" = "#C44536"
+      ),
+      breaks = c(
+        "low exposure",
+        "moderate exposure",
+        "high exposure"
+      ),
+      labels = c(
+        "low climate exposure",
+        "moderate climate exposure",
+        "high climate exposure"
+      )
+    ) +
+    labs(fill = "",
+         title = ) +
+    theme(legend.key.spacing.x = unit(1, "cm"),
+          plot.title = element_text(hjust = 0.5))
+  
+  print(plot)
+  
+}
+
+
+```
+
+
+# Sensitivity analyis
+
+Here, we compare use Kendall tau correlation to compare differences in rank across different methods for (1) different methods for calculating exposure; (3) different contributing measures to sensitivity; (3) the individual variables contributing measures within adaptive capacity; and (4) the grouped measures that contributing to adaptive capacity (i.e., learning, flexibility, assets, social organization), where each grouped measure can contain multiple variables of adaptive capacity. We first run sensitivity analysis on each of the measures
+
+## Analyze the sensitivity of different exposure measures
+
+```{r exposure measurement: sensitivity analysis}
+# Helper function to dynamically select either exposure or vulnerability columns
+# to run sensitivity analysis
+run_sensitivity_analysis <- function(dfs, comparison = c("exposure", "vulnerability")) {
+  comparison <- match.arg(comparison)
+
+  list <- lapply(dfs, function(df) df[[comparison]])   # or `pull()` if you want a vector
+  
+  # Run sensitivity analysis
+  dir_probs_matrix <- exp_sensitivity_analysis(exp_list = list)
+  
+  return(dir_probs_matrix)
+}
+
+# Create a list out of the different exposure calculations
+dfs <- list(vuln_total_no_gapfill,
+             vuln_total_unwgt_region_gapfill,
+             vuln_total_wgt_region_gapfill,
+             vuln_total_unwgt_thorough_gapfill,
+             vuln_total_wgt_thorough_gapfill,
+             vuln_total_unwgt_hierarchical_gapfill,
+             vuln_total_wgt_hierarchical_gapfill,
+             vuln_total_unwgt_diagonal_gapfill,
+             vuln_total_wgt_diagonal_gapfill)
+
+# Run sensitvity analysis
+dir_probs_matrix <- run_sensitivity_analysis(dfs, comparison = "exposure")
+
+
+# compute min r_kendall per combination
+mins <- dir_probs_matrix %>%
+  drop_na() %>%
+  group_by(combination) %>%
+  summarise(
+    min_y = min(r_kendall, na.rm = TRUE) # x‑position of the min
+  )
+
+# Step 2: main plot
+plot <- data.frame(dir_probs_matrix) %>%
+  drop_na() %>%
+  mutate(combination = factor(combination)) %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = combination)) +
+  geom_line() +
+  facet_wrap(~ combination, nrow = 6) +
+  labs(
+    y = "Kendall tau correlation",
+    x = "Dirichlet-assigned weight for focal exposure method",
+    title = "Sensitivity of exposure score"
+  ) +
+  theme_cowplot() +
+  guides(color = "none") +
+  theme(
+    axis.text = element_text(size = 8),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  scale_color_viridis_d(option = "plasma", end = 0.8) +
+
+  # Step 3: add the min labels
+  geom_text(
+    data = mins,
+    aes(x = 0.6, y = 0.6, label = sprintf("Min: %.3f", min_y)),
+    color = "black",
+    size = 2.5,
+    vjust = -0.5,
+    inherit.aes = FALSE
+  )
+
+
+# Save plot
+ggsave("../images/exploratory/sensitiity_analysis_exposure.jpg", plot = plot, device = "jpg", width = 10, height = 6.5, dpi = 300)
+```
+
+## Sensitivity analysis of sensitivity measure
+
+```{r sensitivity measurement: sensitivity analysis}
+# Run sensitivity analysis
+dir_probs_matrix_sensitivity <- sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                                                             analysis = "sensitivity")
+
+plot <- dir_probs_matrix_sensitivity %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var),
+         var = case_when(var == "1" ~ "Foreign reliance (%)",
+                         var == "2" ~ "Marine capture reliance (%)")) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal sensitivity variable", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_sensitivity.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+## Sensitivity analysis on adaptive capacity variables
+
+### Variables within adaptive capacity
+
+```{r adaptive capacity measurement: sensitivity analysis}
+dir_probs_matrix_ac_variables <- sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                                                             analysis = "adaptive_capacity_variables")
+
+plot <- dir_probs_matrix_ac_variables %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var),
+         var = case_when(var == "1" ~ "GDP per capita",
+                         var == "2" ~ "Trade (% of GDP)",
+                         var == "3" ~ "Sanitation",
+                         var == "4" ~ "Supermarkets",
+                         var == "5" ~ "Life expectancy",
+                         var == "6" ~ "Proportion labor force",
+                         var == "7" ~ "Human capacity index",
+                         var == "8" ~ "Government effectiveness",
+                         var == "9" ~ "Food safety capacity",
+                         var == "10" ~ "Rule of law")) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 8),
+          strip.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal adaptive capacity variable", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_adaptive_capacity_variables.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```
+
+### Components within adaptive capacity
+
+```{r}
+dir_probs_matrix_ac_components <- 
+  sens_ac_sensitivity_analysis(input_df = e_s_ac_total_no_gapfill,
+                               analysis = "adaptive_capacity_components")
+
+plot <- dir_probs_matrix_ac_components %>%
+  filter(r_kendall != 1) %>%
+  mutate(var = factor(var)) %>%
+  mutate(var = case_when(
+         var == "1" ~ "Assets",
+         var == "2" ~ "Flexibility",
+         var == "3" ~ "Social Organization",
+         var == "4" ~ "Learning"),
+         dirichlet_prob = case_when(
+           var != "Learning" ~ dirichlet_prob * 3,
+           TRUE ~ dirichlet_prob
+         )) %>%
+  drop_na() %>%
+  ggplot(aes(x = dirichlet_prob, y = r_kendall, color = var)) +
+  geom_line() +
+  theme_cowplot() +
+  facet_wrap(~ var) +
+  scale_color_viridis_d(end = 0.8) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 8),
+          strip.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Dirichlet-assigned weight for focal adaptive capacity component", y = "Kendall tau correlation", title = "Sensitivity of vulnerability score")
+
+ggsave("../images/exploratory/sensitivity_analysis_adaptive_capacity_components.jpg", plot = plot, device = "jpg", width = 6, height = 4, dpi = 300)
+```

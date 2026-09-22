@@ -342,6 +342,50 @@ ggsave(
 )
 ```
 
+```{r}
+vuln_df %>%
+  distinct(consumer_iso3c, exposure, vulnerability, foreign_prop_contribution, region) %>%
+  ggplot(aes(x = foreign_prop_contribution, y = exposure)) +
+  geom_point() +
+  facet_wrap(~ region) +
+  geom_smooth(method = "lm")
+
+# Calculate the consumption weight for each country
+proj_consumption %>%
+  group_by(consumer_iso3c, producer_iso3c) %>%
+  summarize(live_weight_t = sum(live_weight_t)) %>%
+  # calculate the proportion weight for each country
+  group_by(consumer_iso3c) %>%
+  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  ungroup() %>%
+  arrange(-prop_consumption) %>%
+  filter(producer_iso3c != consumer_iso3c) %>%
+  group_by(consumer_iso3c) %>%
+  top_n(n = 5) %>%
+  exploreARTIS::add_region("consumer_iso3c", "region") %>%
+  filter(region == "North America") %>%
+  ggplot(
+  aes(
+    x = consumer_iso3c,
+    y = producer_iso3c,
+    fill = prop_consumption
+  )
+) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    labels = scales::percent,
+    name = "Share of\nconsumption"
+  ) +
+  labs(
+    x = "Consumer country",
+    y = "Producer country"
+  ) +
+  theme_minimal()
+
+```
+
+
 ## What proportion of regions' consumption is consumed from for/dom and what proportion of that is projected to increase / decrease in catch?
 
 ```{r}

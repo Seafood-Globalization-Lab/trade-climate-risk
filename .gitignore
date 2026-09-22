@@ -55,3 +55,4 @@ archive/
 code/00_Preprocess_Data.R
 
 images
+code/.vdoc*

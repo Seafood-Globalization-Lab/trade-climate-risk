@@ -9,6 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(arrow)
+library(exploreARTIS)
 ```
 
 
@@ -50,6 +51,15 @@ agg_rel_method %>%
 # What percent of global-animal source protein consumption do marine caught aquatic foods make up?
 
 ```{r}
+
+# Two questions:
+# 1. How long has marine capture remained the most supplied aquatic food
+# source by habitat and method to provide animal proteins?
+
+# 2. What is most recent percent contribution that marine capture foods provide?
+# to global protein supplies?
+
+# Create dataset for answering these two questions
 # Calculate the aggregate protein reliance by habitat and method
 agg_rel_habitat_method <- aquatic_reliance %>%
   group_by(
@@ -68,12 +78,58 @@ agg_rel_habitat_method <- aquatic_reliance %>%
            (food_group_total_protein_t / sum(food_group_total_protein_t))) %>%
   filter(food_group == "aquatic") %>%
   # Remove overlapping FBS years
-  filter(year == 2023)
+  filter(!(year %in% c(2010, 2011, 2012, 2013) & data_source == "old FBS"))
 
+# Question 1
 agg_rel_habitat_method %>%
-  mutate(perc_animal_protein = round(perc_animal_protein, 1)) %>%
-  arrange(-perc_animal_protein)
+  group_by(year) %>%
+  mutate(is_max = perc_animal_protein == max(perc_animal_protein)) %>%
+  group_by(method, habitat) %>%
+  count(is_max)
+
+# Questions 2
+mcap_pct_2023 <- agg_rel_habitat_method %>%
+  filter(year == 2023) %>%
+  filter(method == "capture",
+         habitat == "marine") %>%
+  pull(perc_animal_protein) %>%
+  round(1)
 ```
+For example, by production method, aquaculture contributes the largest percentage to global animal-source protein supplies, 7.3% in 2023 (Quiroz et al. 2027).
+However, by production method and habitat, marine capture has contributed the most in recent decades, 5.2% in 2023 (Quiroz et al. 2027).
+
+# What percent does foreign marine capture currently make?
+
+```{r}
+fmcap_pct_2023 <- aquatic_reliance %>%
+  group_by(
+  year,
+  data_source,
+  method,
+  habitat,
+  consumption_source,
+  food_group
+  ) %>%
+  # Calculate annual global aquatic animal protein consumption
+  summarize(food_group_total_protein_t = sum(protein_consumed_t_peryr),
+            .groups = "keep") %>%
+  ungroup() %>%
+  group_by(year) %>%
+  mutate(perc_animal_protein = 100 *
+           (food_group_total_protein_t / sum(food_group_total_protein_t))) %>%
+  filter(food_group == "aquatic") %>%
+  # Remove overlapping FBS years
+  filter(year == 2023) %>%
+  filter(method == "capture",
+         habitat == "marine",
+         consumption_source == "foreign") %>%
+  pull(perc_animal_protein) %>%
+  round(1)
+
+(fmcap_pct_2023 / mcap_pct_2023) %>% round(2) * 100
+```
+
+
 
 # What proportion of marine captures has increased 
 ```{r}
