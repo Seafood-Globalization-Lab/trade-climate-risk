@@ -12,18 +12,18 @@
 # values per EEZ so that species with missing projections can borrow from relatives
 generate_mcp_averages <- function(df,
                                   method = c("eez", "realm", "region", "global"),
-                                  averaging = c("unweighted", "weighted"),
+                                  averaging_type = c("unweighted", "weighted"),
                                   ecoregion,
                                   num_species) {
   
   # Ensure that inputs to the following lines of code match function arguments
   method <- match.arg(method)
-  averaging <- match.arg(averaging)
+  averaging_type <- match.arg(averaging_type)
   
   # Set taxa levels to calculate averages for
   tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
   
-  # Perform weighted / unweighted averaging and store in `x`
+  # Perform weighted / unweighted averaging_type and store in `x`
   x <- map_dfr(tax_levels, function(level) {
     
     # Based on function input, group by function method input
@@ -35,7 +35,7 @@ generate_mcp_averages <- function(df,
       global = c(level)
     )
     
-    if (averaging == "weighted") { # Compute weighted avearages
+    if (averaging_type == "weighted") { # Compute weighted avearages
       
       df2 <- df %>%
         filter(!is.na(ssp126) | !is.na(ssp585)) %>%

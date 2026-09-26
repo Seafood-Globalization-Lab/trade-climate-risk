@@ -4,37 +4,22 @@
 
 fill_with_higher_taxa <- function(df,
                                   gap_filling_method,
-                                  averaging,
+                                  averaging_type,
                                   ecoregion,
                                   num_species,
-                                  assumed_sd) {
+                                  assumed_sd,
+                                  fill_type = c("gap_fill", "average")) {
+  
+  # Make sure fill_type argument input matches the the argument selections
+  fill_type <- match.arg(fill_type)
   
   # ---------------------------------------------------------------------------
   # Set up lookup table
   # ---------------------------------------------------------------------------
   
-  if (gap_filling_method == "bayesian") {
-    
-    lookup_dir <- file.path(
-      "../data/exposure/lookup_tables/bayesian",
-      paste0(assumed_sd, "_sd")
-    )
-    
-    lookup_file <- file.path(lookup_dir, "lookup_table.rds")
-    
-    build_lookup <- function() {
-      build_bayesian_lookup(
-        df = df,
-        ecoregion = ecoregion,
-        assumed_sd = assumed_sd
-      )
-    }
-    
-  } else {
-    
     lookup_dir <- file.path(
       "../data/exposure/lookup_tables",
-      paste0(num_species, "_species")
+      paste0(fill_type, "/", num_species, "_species")
     )
     
     lookup_file <- file.path(lookup_dir, "lookup_table.rds")
@@ -46,7 +31,7 @@ fill_with_higher_taxa <- function(df,
         num_species = num_species
       )
     }
-  }
+
   
   # Create directory if needed
   dir.create(lookup_dir, recursive = TRUE, showWarnings = FALSE)
@@ -68,15 +53,29 @@ fill_with_higher_taxa <- function(df,
   tax_levels <- c("genus", "family", "order", "class", "phylum", "kingdom")
   
   # Create empty variables that will be filled as gap filling happens
-  out_df <- df %>% mutate(gapfill_level = NA_character_,
-                          gapfill_method = NA_character_,
-                          cv_ssp126 = NA,
-                          cv_ssp585 = NA)
+  
+  if (fill_type == "gap_fill") {
+    
+    out_df <- df %>% mutate(
+      gapfill_level = NA_character_,
+      gapfill_method = NA_character_,
+      cv_ssp126 = NA,
+      cv_ssp585 = NA
+      )
+    
+  } else {
+    
+    out_df <- df
+    
+  }
+
+  
+
   
   # ---------------------------------------------------------------------------
   # EEZ-level gap filling
   # ---------------------------------------------------------------------------
-  if ((gap_filling_method != "hierarchical" & gap_filling_method != "diagonal" & gap_filling_method != "bayesian")) {
+  if ((gap_filling_method != "hierarchical" & gap_filling_method != "diagonal")) {
     
     for (level in tax_levels) {
       
@@ -84,7 +83,7 @@ fill_with_higher_taxa <- function(df,
       
       out_df <- fill_higher_taxa_helper(out_df,
                                         gap_filling_method = "eez",
-                                        averaging = averaging,
+                                        averaging_type = averaging_type,
                                         lookup_table = lookup_table,
                                         ecoregion = ecoregion,
                                         level = level,
@@ -92,9 +91,9 @@ fill_with_higher_taxa <- function(df,
       
     }
     
-    # ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Realm-level gap filling
-    # ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     
     if (gap_filling_method == "realm") {
       
@@ -103,7 +102,7 @@ fill_with_higher_taxa <- function(df,
         
         out_df <- fill_higher_taxa_helper(out_df,
                                           gap_filling_method = "realm",
-                                          averaging = averaging,
+                                          averaging_type = averaging_type,
                                           lookup_table = lookup_table,
                                           ecoregion = ecoregion,
                                           level = level,
@@ -113,9 +112,9 @@ fill_with_higher_taxa <- function(df,
     }
     
     
-    # ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Region-level gap filling
-    # ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     if (gap_filling_method == "region") {
       
       for (level in tax_levels) {
@@ -123,7 +122,7 @@ fill_with_higher_taxa <- function(df,
         
         out_df <- fill_higher_taxa_helper(out_df,
                                           gap_filling_method = "region",
-                                          averaging = averaging,
+                                          averaging_type = averaging_type,
                                           lookup_table = lookup_table,
                                           ecoregion = ecoregion,
                                           level = level,
@@ -132,9 +131,9 @@ fill_with_higher_taxa <- function(df,
       
     }
     
-    # ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Realm --> Region --> Global gapfilling 
-    # ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     if (gap_filling_method == "thorough") {
       
       for (level in tax_levels) {
@@ -144,7 +143,7 @@ fill_with_higher_taxa <- function(df,
         # 1. Attempt realm-level gap fills
         out_df <- fill_higher_taxa_helper(out_df,
                                           gap_filling_method = "realm",
-                                          averaging = averaging,
+                                          averaging_type = averaging_type,
                                           lookup_table = lookup_table,
                                           ecoregion = ecoregion,
                                           level = level,
@@ -159,7 +158,7 @@ fill_with_higher_taxa <- function(df,
         # 2. Attempt region-level gap fills
         out_df <- fill_higher_taxa_helper(out_df,
                                           gap_filling_method = "region",
-                                          averaging = averaging,
+                                          averaging_type = averaging_type,
                                           lookup_table = lookup_table,
                                           ecoregion = ecoregion,
                                           level = level,
@@ -174,7 +173,7 @@ fill_with_higher_taxa <- function(df,
         # 2. Attempt region-level gap fills
         out_df <- fill_higher_taxa_helper(out_df,
                                           gap_filling_method = "global",
-                                          averaging = averaging,
+                                          averaging_type = averaging_type,
                                           lookup_table = lookup_table,
                                           ecoregion = ecoregion,
                                           level = level,
@@ -197,7 +196,7 @@ fill_with_higher_taxa <- function(df,
       # 1. Attempt EEZ-level gap fills
       out_df <- fill_higher_taxa_helper(out_df,
                                         gap_filling_method = "eez",
-                                        averaging = averaging,
+                                        averaging_type = averaging_type,
                                         lookup_table = lookup_table,
                                         ecoregion = ecoregion,
                                         level = level,
@@ -206,7 +205,7 @@ fill_with_higher_taxa <- function(df,
       # 2. Attempt realm-level gap fills
       out_df <- fill_higher_taxa_helper(out_df,
                                         gap_filling_method = "realm",
-                                        averaging = averaging,
+                                        averaging_type = averaging_type,
                                         lookup_table = lookup_table,
                                         ecoregion = ecoregion,
                                         level = level,
@@ -215,7 +214,7 @@ fill_with_higher_taxa <- function(df,
       # 3. Attempt region-level gap fills
       out_df <- fill_higher_taxa_helper(out_df,
                                         gap_filling_method = "region",
-                                        averaging = averaging,
+                                        averaging_type = averaging_type,
                                         lookup_table = lookup_table,
                                         ecoregion = ecoregion,
                                         level = level,
@@ -224,7 +223,7 @@ fill_with_higher_taxa <- function(df,
       # 4. Attempt global-level gap fills
       out_df <- fill_higher_taxa_helper(out_df,
                                         gap_filling_method = "global",
-                                        averaging = averaging,
+                                        averaging_type = averaging_type,
                                         lookup_table = lookup_table,
                                         ecoregion = ecoregion,
                                         level = level,
@@ -236,9 +235,9 @@ fill_with_higher_taxa <- function(df,
   
   
   # ---------------------------------------------------------------------------
-  # Diagonal gapfilling (frequentist & Bayesian)
+  # Diagonal gapfilling
   # ---------------------------------------------------------------------------
-  if (gap_filling_method == "diagonal" | gap_filling_method == "bayesian") {
+  if (gap_filling_method == "diagonal") {
     
     # 1. Initialize the 7x4 matrix
     pattern <- matrix(data = c(1,3,6,10,2,5,9,14,4,8,13,18,7,12,
@@ -264,7 +263,7 @@ fill_with_higher_taxa <- function(df,
       
       out_df <- fill_higher_taxa_helper(out_df,
                                         gap_filling_method = lookup$col[lookup$value == i],
-                                        averaging = averaging,
+                                        averaging_type = averaging_type,
                                         lookup_table = lookup_table,
                                         ecoregion = ecoregion,
                                         level = lookup$row[lookup$value == i],
@@ -277,20 +276,25 @@ fill_with_higher_taxa <- function(df,
   # Post gapfilling data processing, delineate whether the gapfilling
   # was not needed or was unable to be performed.
   # Gapfill levels / methods are otherwise left unchanged.
+  
   out_df <- out_df %>%
     mutate(gapfill_method = case_when(
-      !is.na(ssp126) & is.na(gapfill_method) ~ "Gapfill not needed",
+      .env$fill_type == "gap_fill" &
+        !is.na(ssp126) &
+        is.na(gapfill_method) ~ "No fill needed",
       is.na(ssp126) ~ "Unsuccessful gapfill",
       TRUE ~ gapfill_method 
     ),
     gapfill_level = case_when(
-      !is.na(ssp126) & is.na(gapfill_level) ~ "Gapfill not needed",
+      .env$fill_type == "gap_fill" &
+        !is.na(ssp126) &
+        is.na(gapfill_level) ~ "No fill needed",
       is.na(ssp126) ~ "Unsuccessful gapfill",
       TRUE ~ gapfill_level 
     ),
-    averaging = case_when(!(gapfill_method == "Gapfill not needed" |
-                              gapfill_method == "Unsuccessful gapfill") ~ averaging,
-                          TRUE ~ NA_character_) # define whether weighted or unweighted averaging was used.
+    averaging_type = case_when(!(gapfill_method == "No fill needed" |
+                                   gapfill_method == "Unsuccessful gapfill") ~ averaging_type,
+                               TRUE ~ NA_character_) # define whether weighted or unweighted averaging_type was used.
     ) %>% 
     select(-taxa_level) # not needed in final output
   

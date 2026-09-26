@@ -16,13 +16,13 @@ build_taxa_lookup <- function(df, ecoregion, num_species) {
   
   eez_gapfills_unwgt <- generate_mcp_averages(df = df,
                                               method = "eez",
-                                              averaging = "unweighted",
+                                              averaging_type = "unweighted",
                                               ecoregion = ecoregion,
                                               num_species = num_species)
   
   eez_gapfills_wgt <- generate_mcp_averages(df = df,
                                             method = "eez",
-                                            averaging = "weighted",
+                                            averaging_type = "weighted",
                                             ecoregion = ecoregion,
                                             num_species = num_species)
   
@@ -32,13 +32,13 @@ build_taxa_lookup <- function(df, ecoregion, num_species) {
   
   realm_gapfills_unwgt <- generate_mcp_averages(df = df,
                                                 method = "realm",
-                                                averaging = "unweighted",
+                                                averaging_type = "unweighted",
                                                 ecoregion = ecoregion,
                                                 num_species = num_species)
   
   realm_gapfills_wgt <- generate_mcp_averages(df = df,
                                               method = "realm",
-                                              averaging = "weighted",
+                                              averaging_type = "weighted",
                                               ecoregion = ecoregion,
                                               num_species = num_species)
   
@@ -47,13 +47,13 @@ build_taxa_lookup <- function(df, ecoregion, num_species) {
   # ---------------------------------------------------------------------------
   region_gapfills_unwgt <- generate_mcp_averages(df = df,
                                                  method = "region",
-                                                 averaging = "unweighted",
+                                                 averaging_type = "unweighted",
                                                  ecoregion = ecoregion,
                                                  num_species = num_species)
   
   region_gapfills_wgt <- generate_mcp_averages(df = df,
                                                method = "region",
-                                               averaging = "weighted",
+                                               averaging_type = "weighted",
                                                ecoregion = ecoregion,
                                                num_species = num_species)
   
@@ -63,13 +63,13 @@ build_taxa_lookup <- function(df, ecoregion, num_species) {
   
   global_gapfills_unwgt <- generate_mcp_averages(df = df,
                                                  method = "global",
-                                                 averaging = "unweighted",
+                                                 averaging_type = "unweighted",
                                                  ecoregion = ecoregion,
                                                  num_species = num_species)
   
   global_gapfills_wgt <- generate_mcp_averages(df = df,
                                                method = "global",
-                                               averaging = "weighted",
+                                               averaging_type = "weighted",
                                                ecoregion = ecoregion,
                                                num_species = num_species)
   

@@ -7,15 +7,16 @@
 
 fill_higher_taxa_helper <- function(df,
                                     gap_filling_method,
-                                    averaging,
+                                    averaging_type,
                                     ecoregion,
                                     lookup_table,
                                     level,
                                     join_by_map) {
   
-  suffix <- if (averaging == "weighted") "wgt" else "unwgt"
+  suffix <- if (averaging_type == "weighted") "wgt" else "unwgt"
   selector <- paste0(gap_filling_method,"_gapfills_",suffix)
   
+  # Prevent bugs depending on the model run
   if (level == "genus") {
     
     if (gap_filling_method == "realm") {
@@ -43,7 +44,7 @@ fill_higher_taxa_helper <- function(df,
     left_join(
       lookup_table[[selector]] %>% filter(taxa_level == level),
       by = join_cols) %>%
-    ## Conduct EEZ gapfills
+    ## Conduct gapfills
     ### Only assign the gapfill method if there was actually a gapfill occurring
     ### Only assign the taxonomic level for which the gapfill was performed at
     ### if a gapfill occurred
@@ -65,6 +66,9 @@ fill_higher_taxa_helper <- function(df,
            -!!sym(paste0(gap_filling_method,"_avg_ssp585")),
            -!!sym(paste0(gap_filling_method,"_cv_ssp126")),
            -!!sym(paste0(gap_filling_method,"_cv_ssp585")))
+  
+  # cat(paste0("Level ", level, " and ", gap_filling_method," spatial fill complete"))
+  # cat(paste0("Number of rows in output data: ", nrow(df)))
   
   return(df)
   
