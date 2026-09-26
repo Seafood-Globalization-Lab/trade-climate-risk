@@ -40,7 +40,7 @@ generate_mcp_averages <- function(df,
       df2 <- df %>%
         filter(!is.na(ssp126) | !is.na(ssp585)) %>%
         group_by(sciname_hs_modified, eez_iso3c) %>%
-        summarize(live_weight_t = sum(live_weight_t)) %>%
+        summarize(live_weight_t = sum(live_weight_t), .groups = "drop") %>%
         ungroup() %>%
         left_join(
           ecoregion %>% select(iso3c, realm),
@@ -98,7 +98,8 @@ generate_mcp_averages <- function(df,
             
             sqrt(wvar) / wm
             
-          }
+          },
+          .groups = "drop"
         ) %>%
         ungroup()
       

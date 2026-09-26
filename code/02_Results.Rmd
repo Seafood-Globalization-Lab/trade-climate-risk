@@ -79,6 +79,75 @@ sapply(
   source
 ) %>%
   invisible()
+
+dir <- file_path
+```
+
+```{r}
+# Calculate vulnerabilities
+
+for (i in c("thorough", "diagonal", "hierarchical")) {
+  for (j in c("unweighted", "weighted")) {
+    for (k in c(1, 2, 5)) {
+      vuln <- calculate_vulnerability(
+        portfolio = "total_portfolio",
+        dir = file_path,
+        gap_filling_method = i,
+        averaging_type = j,
+        num_species = k,
+        drop_na = FALSE
+      )
+      
+    }
+    
+  }
+  
+}
+
+# Run correlations among different exposure calculations
+files <- list.files("../output/vulnerability", pattern = "\\.csv$",
+                    full.names = TRUE, recursive = TRUE)
+
+# Read in all exposure files
+data_list <- lapply(files, read.csv)
+
+# Derive the comparisons we need to run against
+comparison_matrix <- number_unique_combs(18)
+
+# Add on a third column to the matrix for correlation
+cor_matrix <- matrix(NA, nrow = nrow(comparison_matrix), ncol = 1)
+
+cor_comparison_matrix <- cbind(comparison_matrix, cor_matrix)
+
+for (i in 1:nrow(comparison_matrix)) {
+  
+  ds1_idx <- comparison_matrix[i,1]
+  ds2_idx <- comparison_matrix[i,2]
+  ds1 <- data_list[[ds1_idx]]
+  ds2 <- data_list[[ds2_idx]]
+  
+  # Run a continuous-variable comparison
+  cor <- cor(na.omit(ds1$exposure), na.omit(ds2$exposure), method = "kendall")
+  cor_comparison_matrix[i,3] <- cor
+
+  
+      
+}
+
+cor_comparison_matrix %>%
+  data.frame() %>%
+  arrange(-X3) %>%
+  mutate(comparison = paste0(X1, "_", X2)) %>%
+  rename(cor = X3) %>%
+  ggplot(aes(x = fct_reorder(comparison, -cor), cor)) +
+  geom_col(width = 1.5) +
+  geom_point(size = 0.5) +
+  theme_light() +
+  labs(x = "Comparison", y = "Kendall tau correlation") +
+  theme(panel.grid.major.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title = element_text(size = 15),
+        axis.text = element_text(color = "black"))
 ```
 
 ---
@@ -107,9 +176,9 @@ for (i in seq_along(species_gap_fills)) {
   
   data <- consumption_gap_fills[[i]]
   
-  plot <- data %>%
+  plot <- cons_filled %>%
   mutate(gapfill_method = case_when(
-    !(gapfill_method == "Gapfill not needed" |
+    !(gapfill_method == "No fill needed" |
       gapfill_method == "Unsuccessful gapfill") ~
       substring(gapfill_method, first = 1, last = nchar(gapfill_method)-8),
     TRUE ~ gapfill_method
@@ -117,18 +186,20 @@ for (i in seq_along(species_gap_fills)) {
   mutate(gapfill_performed = paste0(gapfill_method, ", ", gapfill_level),
          gapfill_performed = case_when(
            gapfill_performed ==
-             "Gapfill not needed, Gapfill not needed" ~ "Gapfill not needed",
+             "No fill needed, No fill needed" ~ "No fill needed",
            gapfill_performed ==
              "Unsuccessful gapfill, Unsuccessful gapfill" ~
              "Unsuccessful gapfill",
            TRUE ~ gapfill_performed
            )) %>%
+  group_by(fill_type) %>%
+  mutate(total_weight = sum(live_weight_t)) %>%
   group_by(gapfill_performed) %>%
   summarize(live_weight_t = sum(live_weight_t), .groups = "drop") %>%
-  mutate(prop_consumption = live_weight_t / sum(live_weight_t)) %>%
+  mutate(prop_consumption = live_weight_t / total_weight) %>%
   mutate(gapfill_performed = factor(
     gapfill_performed, levels = c(
-      "Gapfill not needed",
+      "No fill needed",
       "eez, genus", "eez, family", "realm, genus",
       "eez, order", "realm, family", "region, genus",
       "eez, class", "realm, order", "region, family",
@@ -153,8 +224,7 @@ for (i in seq_along(species_gap_fills)) {
     aes(label = paste0(round(100 * prop_consumption, 1), "%")),
     hjust = -0.15,
     fontface = "bold",
-    size = 3.5
-  ) +
+    size = 3.5) +
   scale_x_continuous(
     expand = expansion(mult = c(0, 0.08))
   ) +
@@ -170,15 +240,32 @@ for (i in seq_along(species_gap_fills)) {
     axis.text.y = element_text(color = "black"),
     axis.text.x = element_text(color = "black"),
     plot.title = element_text(hjust = 0.5)
-  )
+  ) +
+    facet_wrap(~ fill_type)
 
 print(plot)
   
 }
 
-rm(consumption_gap_filled_1,consumption_gap_filled_2.
-   consumption_gap_filled_5, consumption_gap_fills, data)
 ```
+
+# See where gapfills are coming from
+
+```{r}
+consumption_proj <- read_parquet("../output/consumption_catch_proj_gap_filled/2_species/consumption_total_portfolio_unweighted_diagonal_gapfill.parquet")
+
+consumption_proj %>%
+  filter(str_d)
+  group_by(sciname_hs_modified, eez_iso3c, gapfill_method, gapfill_level) %>%
+  summarize(live_weight_t = sum(live_weight_t), .groups = "drop") %>%
+  mutate(pct_consumption = round(live_weight_t / sum(live_weight_t) * 100, 10)) %>%
+  filter(gapfill_method == "eez_gapfill", gapfill_level == "genus") %>%
+  arrange(-pct_consumption)
+
+
+  lookup_table <- readRDS("../data/exposure/lookup_tables/gap_fill/1_species/lookup_table.rds")
+```
+
 
 # Map out values on continuous & discrete color scale
 
@@ -186,25 +273,25 @@ rm(consumption_gap_filled_1,consumption_gap_filled_2.
 vuln_1 <- calculate_vulnerability(portfolio = "total_portfolio",
                                   dir = file_path,
                                   gap_filling_method = "diagonal",
-                                  averaging = "unweighted",
+                                  averaging_type = "unweighted",
                                   num_species = 1,
-                                  drop_na = TRUE
+                                  drop_na = FALSE
                                   )
 
 vuln_2 <- calculate_vulnerability(portfolio = "total_portfolio",
                                   dir = file_path,
                                   gap_filling_method = "diagonal",
-                                  averaging = "unweighted",
+                                  averaging_type = "weighted",
                                   num_species = 2,
-                                  drop_na = TRUE
+                                  drop_na = FALSE
                                   )
 
 vuln_5 <- calculate_vulnerability(portfolio = "total_portfolio",
                                   dir = file_path,
                                   gap_filling_method = "diagonal",
-                                  averaging = "unweighted",
+                                  averaging_type = "unweighted",
                                   num_species = 5,
-                                  drop_na = TRUE
+                                  drop_na = FALSE
                                   )
 # Continuous color scale
 vuln_1 %>% create_map(fill = "exposure", country.col.name = "consumer_iso3c")
@@ -274,6 +361,65 @@ mod_vuln_lb <- vuln_df$exposure %>% quantile(0.33)
 
 ```
 
+# Correlation between different methods of calculating exposure
+
+```{r fixit delete}
+vuln_2_unwgt <- calculate_vulnerability(portfolio = "total_portfolio",
+                                  dir = file_path,
+                                  gap_filling_method = "diagonal",
+                                  averaging = "unweighted",
+                                  num_species = 2,
+                                  drop_na = TRUE
+                                  )
+
+vuln_2_wgt <- calculate_vulnerability(portfolio = "total_portfolio",
+                                  dir = file_path,
+                                  gap_filling_method = "diagonal",
+                                  averaging = "weighted",
+                                  num_species = 2,
+                                  drop_na = TRUE
+                                  )
+
+
+plot(vuln_2_unwgt$exposure, vuln_2_unwgt$vulnerability,  method = "kendall")
+
+lm(vulnerability ~ adaptive_capacity, data = vuln_2_unwgt) %>%
+  summary()
+
+pairs(vuln_2_unwgt[,2:5])
+cor(vuln_2_unwgt[,2:5])
+
+consumption_gap_filled %>%
+  count(gapfill_method, gapfill_level)
+```
+
+
+# Check adaptive c
+# Check adaptive capacity data variable coverage
+
+```{r}
+e_s_ac <- read_csv("../output/e_s_ac/1_species/e_s_ac_total_portfolio_unweighted_diagonal_gapfill.csv")
+
+e_s_ac %>%
+  group_by(gdp, gdp_trade, sanitation,
+           supermarkets, life_expectancy, prop_labor,
+           hci, gov_effectiveness, fsc,	rol) %>%
+  summarise_each(list(na_count = ~sum(is.na(.))))
+gdp	gdp_trade	sanitation	supermarkets	life_expectancy	prop_labor	hci	gov_effectiveness	fsc	rol
+
+e_s_ac %>%
+  group_by(consumer_iso3c) %>%
+  mutate(
+    n_NA = rowSums(is.na(across(c(
+      gdp, gdp_trade, sanitation, supermarkets,
+      life_expectancy, prop_labor, hci,
+      gov_effectiveness, fsc, rol
+    ))))
+  ) %>%
+  mutate(n_NA = factor(n_NA)) %>%
+  create_map(fill = "n_NA", country.col.name = "consumer_iso3c") +
+  scale_fill_viridis_d(option = "viridis")
+```
 
 # Sensitivity analyis
 
