@@ -30,7 +30,7 @@ $\text{Vulnerability}_c = \text{Sensitvity}_c + \text{Exposure}_c + \text{Adapti
 
 Each function handles one job:
 
-Fixit: Update documentation of function
+Fixit: Update function documentation
 <!-- | Function | Runs once? | Purpose | -->
 <!-- |---|---|---| -->
 <!-- | `preprocess_climate_data()` | ✅ Yes | Read DBEM files → interpolate missing taxa → write parquet | -->
@@ -75,7 +75,7 @@ Line 253 is where catch projection gap filling happens.
 - `"total"` — retains the full consumption portfolio
 
 ```{r build-exposure}
-build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consumption, num_species, assumed_sd, mcp_sovereign = mcp_sovereign) {
+build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, consumption, num_species, assumed_sd, mcp_sovereign = mcp_sovereign) {
   
   # Read in data
   
@@ -147,6 +147,30 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
   ecoregion <- bind_rows(ecoregion, landlocked_countries) %>%
     arrange(iso3c) %>%
     select(-shape_area)
+  
+  # Manually add realms for small island nations
+    realm_fixes <- tribble(
+    ~iso3c, ~realm,
+    "AIA", "Tropical Atlantic",
+    "ASM", "Eastern Indo-Pacific",
+    "COK", "Eastern Indo-Pacific",
+    "CYM", "Tropical Atlantic",
+    "GUF", "Tropical Atlantic",
+    "HKG", "Central Indo-Pacific",
+    "MTQ", "Tropical Atlantic",
+    "PYF", "Eastern Indo-Pacific",
+    "SHN", "Tropical Atlantic",
+    "TCA", "Tropical Atlantic",
+    "VGB", "Tropical Atlantic",
+    "BMU", "Temperate Northern Atlantic",
+    "GRL", "Arctic",
+    "PCN", "Eastern Indo-Pacific",
+    "FLK", "Temperate South America",
+    "SGS", "Southern Ocean"
+  )
+    
+    # Bind manually added realms to ecoregion data
+    ecoregion <- bind_rows(ecoregion, realm_fixes)
   
   
   #   Correct Juliano's unaligned species names to Fishbase / SeaLifeBase naming
@@ -235,33 +259,81 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
       ))
   
   ### Join consumption data sciname and catch projections
-    consumption_mcp <- consumption %>%
+  ### (mcp = maximum catch potential)
+  consumption_mcp <- consumption %>%
       # Left join onto sciname data, which has higher-level taxa names that
       # correspond to the `sciname_hs_modified`
     left_join(sciname_taxa, by = c("sciname_hs_modified" = "sciname")) %>%
       # Clean only artis sciname that didn't have data in sciname table
     left_join(
       mcp_sovereign_corrected,
-      by = c("sciname_hs_modified" = "taxon_name", "eez_iso3c"))
+      by = c("sciname_hs_modified" = "taxon_name", "eez_iso3c")) %>%
+    mutate(fill_type = NA_character_) # For gap filling
     
-  # Perform gap filling on catch projections if the
-  # user input says to, otherwise avoid
-  if (gap_filling_method == "none") {
+  # Fill in missing catch projection values
+  # There are two steps to accomplishing this:
+  # 1. Gap fill missing species with gap filled estimates
+  # 2. Use complete species set to create averages for taxa that are not
+  # resolved to species (e.g., Actinopterygii)
     
-    x <- consumption_mcp
+  # Step 1.
+  # filter consumption data to just species for gap filling
+    consumption_mcp_species <- consumption_mcp %>%
+      filter(str_detect(sciname_hs_modified, " ")) %>%
+      mutate(fill_type = "gap_fill")
     
-  } else {
+  # filter consumption data to everything but species
+    consumption_mcp_non_species <- consumption_mcp %>%
+      filter(!str_detect(sciname_hs_modified, " "))
+  
+  if (gap_filling_method != "none") {
     
-    x <- fill_with_higher_taxa(df = consumption_mcp,
-                               gap_filling_method = gap_filling_method,
-                               averaging = averaging,
-                               ecoregion = ecoregion,
-                               num_species = num_species,
-                               assumed_sd = assumed_sd)
-   }
+    consumption_gap_filled <- fill_with_higher_taxa(
+      df = consumption_mcp_species,
+      gap_filling_method = gap_filling_method,
+      averaging_type = averaging_type,
+      ecoregion = ecoregion,
+      num_species = num_species,
+      fill_type = "gap_fill"
+      )
+    
+  # Add gap filled species projections back into ARTIS consumption
+  consumption_gap_filled_prep <- bind_rows(
+    consumption_gap_filled, # species only data
+    consumption_mcp_non_species
+  ) %>%
+    select(-realm, -region)
+  
+  cat("☑️ Gap filling complete. Moving on to averaging.\n")
+  
+  }
+    
+  # Step 2.
+  # Average observed and gap filled species catch projections up to
+  # non-species reported consumption
+    if (gap_filling_method != "none") {
+      consumption_gap_agg <- fill_with_higher_taxa(
+        df = consumption_gap_filled_prep,
+        gap_filling_method = gap_filling_method,
+        averaging_type = averaging_type,
+        ecoregion = ecoregion,
+        num_species = num_species,
+        fill_type = "average"
+      )
+      
+      # Fit final data frame with type of averaging used
+      cons_filled <- consumption_gap_agg %>%
+        mutate(
+          fill_type = case_when(
+            is.na(fill_type) ~ "average",
+            TRUE ~ fill_type
+            ))
+        
+      cat("☑️ Averaging complete.\n")
+    }
 
   # Add taxa levels to data
-  interpolated <- x %>%
+  interpolated <- cons_filled %>%
     mutate(
       taxa_level = case_when(
         sciname_hs_modified == kingdom    ~ "kingdom",
@@ -272,12 +344,12 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging, consum
         sciname_hs_modified == family     ~ "family",
         sciname_hs_modified == subfamily  ~ "subfamily",
         sciname_hs_modified == genus      ~ "genus",
-        str_detect(sciname_hs_modified, " ") ~ "species"
+        grepl(" ", sciname_hs_modified, fixed = TRUE) ~ "species",
+        TRUE ~ NA_character_
       ),
-      species = if_else(
-        str_count(sciname_hs_modified, " ") == 1,
-        word(sciname_hs_modified, 2),
-        NA_character_
+      species = case_when(
+        taxa_level == "species" ~ sub("^[^ ]+ ", "", sciname_hs_modified),
+        TRUE ~ NA_character_
       )
     )
 
@@ -308,7 +380,7 @@ if (gap_filling_method != "none") {
     out_dir,
     "consumption_",
     portfolio, "_",
-    averaging, "_",
+    averaging_type, "_",
     gap_filling_method,
     "_gapfill.parquet"
   )
@@ -326,6 +398,7 @@ if (gap_filling_method != "none") {
   future_long <- interpolated %>%
     pivot_longer(c(ssp126, ssp585), names_to = "scenario", values_to = "future_change_catch")
 
+  # Fixit: revisit this comment and make sure it still makes sense
   # Portfolio-specific row filter + catch-change multiplier
   # Note: the two portfolios intentionally use different multiplier formulas —
   # the foreign portfolio handles positive/negative/zero separately to preserve
@@ -531,15 +604,15 @@ Calls `build_exposure()`, `build_sensitivity()`, and
 writes the output parquet.
 
 ```{r build-e-s-ac-data}
-build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfolio"),
+build_e_s_ac_data <- function(portfolio,
                               dir,
-                              gap_filling_method = c("none", "region", "realm", "thorough", "hierarchical", "diagonal", "bayesian"),
-                              averaging = c("unweighted", "weighted", "none"),
+                              gap_filling_method,
+                              averaging_type,
                               num_species,
                               assumed_sd) {
 
   cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
-  cat(sprintf("%s gap filling, %s averaging; %d minimum species\n", gap_filling_method, averaging, num_species))
+  cat(sprintf("%s gap filling, %s averaging; %d minimum species\n", gap_filling_method, averaging_type, num_species))
 
   # Step 1 - Disaggregate ARTIS consumption by EEZ of catch
   consumption <- disagg_cons_by_eez()
@@ -552,7 +625,7 @@ build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfoli
     dir,
     portfolio,
     gap_filling_method = gap_filling_method,
-    averaging = averaging,
+    averaging_type = averaging_type,
     consumption = consumption,
     num_species = num_species,
     assumed_sd = assumed_sd,
@@ -605,7 +678,7 @@ build_e_s_ac_data <- function(portfolio = c("foreign_portfolio", "total_portfoli
     paste0(
       "e_s_ac_",
       portfolio, "_",
-      if (gap_filling_method != "none") paste0(averaging, "_") else "",
+      if (gap_filling_method != "none") paste0(averaging_type, "_") else "",
       gap_filling_method,
       "_gapfill.csv"
     )
@@ -634,7 +707,7 @@ calculate_vulnerability <- function(
       "none", "region", "realm", "thorough",
       "hierarchical", "diagonal", "bayesian"
       ),
-    averaging = c("unweighted", "weighted", "none"),
+    averaging_type = c("unweighted", "weighted", "none"),
     num_species,
     assumed_sd, 
     drop_na = TRUE) {
@@ -642,7 +715,7 @@ calculate_vulnerability <- function(
   # Ensure user inputs match the arguments of function to limit user input
   portfolio <- match.arg(portfolio)
   gap_filling_method <- match.arg(gap_filling_method)
-  averaging <- match.arg(averaging)
+  averaging_type <- match.arg(averaging_type)
   
   # Name output directory given user input
   output_dir <- file.path(
@@ -656,7 +729,7 @@ calculate_vulnerability <- function(
     paste0(
       "e_s_ac_",
       portfolio, "_",
-      if (gap_filling_method != "none") paste0(averaging, "_") else "",
+      if (gap_filling_method != "none") paste0(averaging_type, "_") else "",
       gap_filling_method,
       "_gapfill.csv"
     )
@@ -676,7 +749,7 @@ calculate_vulnerability <- function(
       portfolio = portfolio,
       dir = dir,
       gap_filling_method = gap_filling_method,
-      averaging = averaging,
+      averaging_type = averaging_type,
       num_species = num_species,
       assumed_sd = assumed_sd)
     
@@ -821,7 +894,7 @@ calculate_vulnerability <- function(
     paste0(
       "vuln_",
       portfolio, "_",
-      if (gap_filling_method != "none") paste0(averaging, "_") else "",
+      if (gap_filling_method != "none") paste0(averaging_type, "_") else "",
       gap_filling_method,
       "_gapfill.csv"
     )
