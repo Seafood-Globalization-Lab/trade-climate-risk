@@ -1,7 +1,20 @@
+# Function name: number_unique_combs.R
+
+# Function purpose: There are functions such as gtools::permutations() which
+# can display the number of combinations between two groups, for example, if
+# you input the number 3 into that function, you would get 6 possible
+# combinations for the numbers 1, 2, and 3. However, exactly half of those
+# observations are not unique — this function serves to pull the unique number
+# of combinations between those numbers, which in the case of 3, would be 3.
+# This is important for sensitivity analysis because we do not want to reanalyze
+# the same two datasets, and have double the data.
+
 number_unique_combs <- function(num_features) {
   
   # Get the possible combinations given the number of features
-  combinations <- gtools::permutations(num_features, r = 2, repeats.allowed = FALSE)
+  combinations <- gtools::permutations(
+    num_features, r = 2, repeats.allowed = FALSE
+    )
   
   # The permutations funciton shows 
   combination_clean <- matrix(ncol = 2)
