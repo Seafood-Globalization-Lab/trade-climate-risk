@@ -202,6 +202,7 @@ disagg_cons_by_eez <- function() {
         eez_name,
         eez_detail,
         consumer_iso3c,
+        source_country_iso3c,
         sciname_hs_modified,
         end_use,
         consumption_percap_live_kg,
@@ -214,7 +215,9 @@ disagg_cons_by_eez <- function() {
     #FIXIT: get rid of everything other than source_country_iso3c
     consumption_eez_human <- consumption_eez %>%
       filter(end_use == "direct human consumption") %>%
-      group_by()
+      select(-end_use) %>%
+      rename(producer_iso3c = source_country_iso3c) %>%
+      ungroup()
     
     # Write consumption data to .parquet
     write_parquet(consumption_eez_human, "../data/miscellaneous/consumption.parquet")
