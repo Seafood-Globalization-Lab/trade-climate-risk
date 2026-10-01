@@ -60,7 +60,7 @@ disagg_cons_by_eez <- function() {
     # Clean SAU production EEZ -------------------------------------------------
     # original code from https://github.com/Seafood-Globalization-Lab/artis-dwf/blob/country-profiles/scripts/functions.R
     
-    source("../utils/01_Analysis/standardize_sau_eez.R")
+    # source("../utils/01_Analysis/standardize_sau_eez.R")
     
     prod_sau_eez <- prod_sau_std %>%
       
@@ -175,7 +175,8 @@ disagg_cons_by_eez <- function() {
       # does not contract df over 2nd group_by()
       group_by(year, country_iso3c, sciname) %>% # needs to be exactly what data is joining by after
       mutate(prop_by_eez = live_weight_t / sum(live_weight_t)) %>%
-      select(-live_weight_t)
+      select(-live_weight_t) %>%
+      filter(!is.na(eez_iso3c)) # Remove any NA eez_iso3c rows
     
     # Disaggregate ARTIS by EEZ of catch - join datasets
     consumption_eez <- consumption %>%
