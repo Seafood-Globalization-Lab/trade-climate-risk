@@ -75,7 +75,7 @@ Line 253 is where catch projection gap filling happens.
 - `"total"` — retains the full consumption portfolio
 
 ```{r build-exposure}
-build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, consumption, num_species, assumed_sd, mcp_sovereign = mcp_sovereign) {
+build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, consumption, num_species, mcp_sovereign = mcp_sovereign) {
   
   # Read in data
   
@@ -131,6 +131,7 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, c
   
   ### Assign countries not associated with a marine ecoregion to "landlocked" code
   landlocked_countries <- consumption %>%
+    ungroup() %>%
     distinct(consumer_iso3c) %>%
     drop_na() %>%
     add_region(col = "consumer_iso3c", region.col.name = "region") %>%
@@ -285,8 +286,24 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, c
   # filter consumption data to everything but species
     consumption_mcp_non_species <- consumption_mcp %>%
       filter(!str_detect(sciname_hs_modified, " "))
+    
+  # Set output directory and path for gap filling method
+  out_dir <- paste0(
+    "../output/consumption_catch_proj_gap_filled/",
+    num_species,
+    "_species/"
+  )
   
-  if (gap_filling_method != "none") {
+  out_path <- paste0(
+    out_dir,
+    "consumption_",
+    portfolio, "_",
+    averaging_type, "_",
+    gap_filling_method,
+    "_gapfill.parquet"
+  )
+  
+  if (gap_filling_method != "none" & !file.exists(out_path)) {
     
     consumption_gap_filled <- fill_with_higher_taxa(
       df = consumption_mcp_species,
@@ -311,7 +328,7 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, c
   # Step 2.
   # Average observed and gap filled species catch projections up to
   # non-species reported consumption
-    if (gap_filling_method != "none") {
+    if (gap_filling_method != "none" & !file.exists(out_path)) {
       consumption_gap_agg <- fill_with_higher_taxa(
         df = consumption_gap_filled_prep,
         gap_filling_method = gap_filling_method,
@@ -331,6 +348,12 @@ build_exposure <- function(dir, portfolio, gap_filling_method, averaging_type, c
         
       cat("☑️ Averaging complete.\n")
     }
+  
+  if (gap_filling_method != "none" & file.exists(out_path)) {
+    
+    cons_filled <- read_parquet(out_path)
+    
+  }
 
   # Add taxa levels to data
   interpolated <- cons_filled %>%
@@ -398,45 +421,39 @@ if (gap_filling_method != "none") {
   future_long <- interpolated %>%
     pivot_longer(c(ssp126, ssp585), names_to = "scenario", values_to = "future_change_catch")
 
-  # Fixit: revisit this comment and make sure it still makes sense
-  # Portfolio-specific row filter + catch-change multiplier
-  # Note: the two portfolios intentionally use different multiplier formulas —
-  # the foreign portfolio handles positive/negative/zero separately to preserve
-  # directionality; the total portfolio uses a single linear conversion.
+  # Convert catch projection values in a value that can multiply to consumption
+  # weight to get the projected change in consumption.
   stock_pre <- if (portfolio == "foreign_portfolio") {
     future_long %>%
       filter(
         consumer_iso3c != producer_iso3c,
-        !is.na(live_weight_t),
+        !is.na(consumption_percap_live_kg),
         !is.na(future_change_catch)
       ) %>%
       mutate(future_change_catch = 1 + (future_change_catch / 100))
   } else {
     future_long %>%
-      filter(!is.na(live_weight_t), !is.na(future_change_catch)) %>%
+      filter(!is.na(consumption_percap_live_kg), !is.na(future_change_catch)) %>%
       mutate(future_change_catch = 1 + (future_change_catch / 100))
   }
 
-  # For each country, calculate the % change in aquatic food supply by calculating
-  # a weighted average of each consumed taxa's projected percentage change in 
-  # catch potential catch multiplied by by their respective proportional live
-  # weight tonnage of their total consumed weight.
   
-  # catch projection percentages by their proportional live weight tonnage
-  # and converting to  
+  # For each consuming country, calculate how much their current per capita
+  # aquatic food consumption is projected to increase or decrease in the future
   exposure <- stock_pre %>%
-    mutate(change_in_stock = live_weight_t * future_change_catch) %>%
-    group_by(consumer_iso3c, scenario) %>% # FIXIT: changed from consumer_iso3c to producer_iso3c - switch back
-    summarise(
-      change_in_stock = sum(change_in_stock),
-      live_weight_t   = sum(live_weight_t)
-    ) %>%
-    ungroup() %>%
-    mutate(pct_change = 100 * ((change_in_stock - live_weight_t) / live_weight_t)) # FIXIT: Use a pipe here if I am testing the expsoure
-    # On producer_iso3c
-    # rename(consumer_iso3c = producer_iso3c) # FIXIT: Remove this as well when done testing
+    mutate(future_consumption_weight = consumption_percap_live_kg * future_change_catch) %>%
+    group_by(consumer_iso3c, scenario) %>% 
+    # summarise(
+    #   future_consumption_weight = sum(future_consumption_weight),
+    #   present_consumption_weight   = sum(consumption_percap_live_kg)
+    # ) %>%
+    mutate(
+      pct_change =
+        100 * ((future_consumption_weight - present_consumption_weight) / present_consumption_weight)
+      )
+    mutate(delta_cons_weight = future_consumption_weight - present_consumption_weight)
   
-  # Return exposure dataframe
+  # Return exposure dataset
   return(exposure)
 }
 ```
@@ -608,8 +625,7 @@ build_e_s_ac_data <- function(portfolio,
                               dir,
                               gap_filling_method,
                               averaging_type,
-                              num_species,
-                              assumed_sd) {
+                              num_species) {
 
   cat(sprintf("\n--- Building E/S/AC data: %s portfolio ---\n", portfolio))
   cat(sprintf("%s gap filling, %s averaging; %d minimum species\n", gap_filling_method, averaging_type, num_species))
@@ -628,7 +644,6 @@ build_e_s_ac_data <- function(portfolio,
     averaging_type = averaging_type,
     consumption = consumption,
     num_species = num_species,
-    assumed_sd = assumed_sd,
     mcp_sovereign = mcp_sovereign
     )
   
@@ -709,7 +724,6 @@ calculate_vulnerability <- function(
       ),
     averaging_type = c("unweighted", "weighted", "none"),
     num_species,
-    assumed_sd, 
     drop_na = TRUE) {
   
   # Ensure user inputs match the arguments of function to limit user input
@@ -750,8 +764,7 @@ calculate_vulnerability <- function(
       dir = dir,
       gap_filling_method = gap_filling_method,
       averaging_type = averaging_type,
-      num_species = num_species,
-      assumed_sd = assumed_sd)
+      num_species = num_species)
     
   }
   
@@ -850,8 +863,8 @@ calculate_vulnerability <- function(
     # Scale exposure data using min/max scaling so values are between 0 and 1
     mutate(
       exposure =
-        (pct_change - min(pct_change, na.rm = TRUE) ) /
-        (max(pct_change, na.rm = TRUE) - min(pct_change,
+        (delta_cons_weight - min(delta_cons_weight, na.rm = TRUE) ) /
+        (max(delta_cons_weight, na.rm = TRUE) - min(delta_cons_weight,
                                               na.rm = TRUE)),
       exposure = -exposure + 1
       ) %>%

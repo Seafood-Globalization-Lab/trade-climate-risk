@@ -1,0 +1,403 @@
+---
+title: "01.5_ValidationChecks"
+author: "Connor Quiroz, Juliano Palacios-Abrantes, and  Jessica A. Gephart"
+date: "2026-10-21"
+output: html_document
+---
+
+# Overview
+
+This document will serve to validate the data that we produce for this
+research project. Our analysis leverages the Aquatic Resource Trade In Species
+(ARTIS) database, and therefore our validation checks will run checks on this
+on the ARTIS data. For example, one validation check in ARTIS is to ensure
+that their output consumption weights add back up to their production weights.
+Here, our data leverages climate exposure obtained from SeaAroundUs (SAU), which
+makes transformations to the consumption weights. We want to ensure that these
+consumption weights, when modified by the climate exposure data, add back up
+to the same volumes when looking between the production and consumption data
+in the ARTIS consumption file. Additionally, we will confirm that the ARTIS
+consumption file volumes add back up to the original production data used to
+produce ARTIS consumption volumes.
+
+The following sections will include the validation checks that we describe and
+perform on this paper's data.
+
+## Read in packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(arrow)
+library(tidyverse)
+library(sf)
+```
+
+## Run Validation checks
+
+### Global prod weights modfied by exposure measure are identical to consumption
+
+Here, we will read in ARTIS consumption data with a couple additional columns
+used to modify the consumption volumes, notably `ssp126` and `ssp585`. These
+are the climate exposure catch projections that we assign for each species and
+taxa. We will ensure when the ssp126 and ssp585 measurements modify ARTIS
+consumption, that their weights add back up to the production weights.
+
+```{r validate prod-cons weights}
+# Read in ARTIS consumption joined-to-exposure data
+consumption_exp <- read_parquet("../output/consumption_catch_proj_gap_filled/3_species/consumption_total_portfolio_weighted_diagonal_gapfill.parquet") %>%
+  filter(consumer_iso3c != "NEI")
+
+# Check for NA rows in the ssp variables
+## First for ssp126
+n_na_cols_ssp126 <- consumption_exp %>%
+  filter(is.na(ssp126)) %>%
+  nrow()
+
+# Print check
+print(paste0(
+    "Are there any NA rows in ARTIS data for ssp126? ",
+    ifelse(n_na_cols_ssp126 == 0, "No", "Yes")
+  ))
+
+# Next check for ssp585
+n_na_cols_ssp585 <- consumption_exp %>%
+  filter(is.na(ssp585)) %>%
+  nrow()
+
+# Print check
+print(paste0(
+    "Are there any NA rows in ARTIS data for ssp126? ",
+    ifelse(n_na_cols_ssp585 == 0, "No", "Yes")
+  ))
+
+# Check for both live weight tonnage and per capita consumption
+for (var in c("live_weight_t", "consumption_percap_live_kg")) {
+
+  # First confirm that there are no NA rows in ARTIS data
+  n_na_cols_cons <- consumption_exp %>%
+    filter(is.na(.data[[var]])) %>%
+    nrow()
+
+  print(paste0(
+    "Are there any NA consumption rows in ARTIS data for ", var, "? ",
+    ifelse(n_na_cols_cons == 0, "No", "Yes")
+  ))
+
+  # Dynamically define scenario column names
+  ssp126_var <- paste0(var, "_ssp126")
+  ssp585_var <- paste0(var, "_ssp585")
+
+  # Modify consumption with the SSP columns
+  consumption_exp_mod <- consumption_exp %>%
+    mutate(
+      !!ssp126_var := .data[[var]] * ssp126,
+      !!ssp585_var := .data[[var]] * ssp585
+    )
+
+  consumption_exp_mod %>%
+    filter(gapfill_level == "Unsuccessful gapfill")
+
+  # Calculate global production totals
+  prod_global_totals <- consumption_exp_mod %>%
+    group_by(producer_iso3c) %>%
+    summarize(
+      !!ssp126_var := sum(.data[[ssp126_var]], na.rm = TRUE),
+      !!ssp585_var := sum(.data[[ssp585_var]], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    summarize(
+      !!ssp126_var := round(sum(.data[[ssp126_var]]), 0),
+      !!ssp585_var := round(sum(.data[[ssp585_var]]), 0)
+    )
+
+  # Calculate global consumption totals
+  cons_global_totals <- consumption_exp_mod %>%
+    group_by(consumer_iso3c) %>%
+    summarize(
+      !!ssp126_var := sum(.data[[ssp126_var]], na.rm = TRUE),
+      !!ssp585_var := sum(.data[[ssp585_var]], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    summarize(
+      !!ssp126_var := round(sum(.data[[ssp126_var]]), 0),
+      !!ssp585_var := round(sum(.data[[ssp585_var]]), 0)
+    )
+
+  # Check SSP126 production and consumption totals
+  global_ssp126_check <-
+    prod_global_totals[[ssp126_var]] ==
+    cons_global_totals[[ssp126_var]]
+
+  print(paste0(
+    "Check: global ARTIS production and consumption totals for ",
+    var, " modified by SSP126 are ",
+    ifelse(global_ssp126_check, "identical", "not identical")
+  ))
+
+  if (global_ssp126_check) {
+    print(paste0(
+      "Global exposure ", var, " volume (SSP126): ",
+      prod_global_totals[[ssp126_var]]
+    ))
+  }
+
+  # Check SSP585 production and consumption totals
+  global_ssp585_check <-
+    prod_global_totals[[ssp585_var]] ==
+    cons_global_totals[[ssp585_var]]
+
+  print(paste0(
+    "Check: global ARTIS production and consumption totals for ",
+    var, " modified by SSP585 are ",
+    ifelse(global_ssp585_check, "identical", "not identical")
+  ))
+
+  if (global_ssp585_check) {
+    print(paste0(
+      "Global exposure ", var, " volume (SSP585): ",
+      prod_global_totals[[ssp585_var]]
+    ))
+  }
+}
+
+
+
+
+# Check by nation
+prod_country_totals <- consumption_exp_mod %>%
+  # key analysis distinction: group by consumer_iso3c
+  group_by(producer_iso3c) %>%
+  summarize(consumption_percap_live_kg_ssp126 = sum(consumption_percap_live_kg_ssp126, na.rm = TRUE),
+            consumption_percap_live_kg_ssp585 = sum(consumption_percap_live_kg_ssp585, na.rm = TRUE))
+
+cons_country_totals <- consumption_exp_mod %>%
+  # key analysis distinction: group by consumer_iso3c
+  group_by(consumer_iso3c) %>%
+  summarize(consumption_percap_live_kg_ssp126 = sum(consumption_percap_live_kg_ssp126, na.rm = TRUE),
+            consumption_percap_live_kg_ssp585 = sum(consumption_percap_live_kg_ssp585, na.rm = TRUE))
+
+# Calculate for each country the proportion of their consumption that is
+# consumed domestically
+
+## Calculate total consumption weight
+total_cons_country <- consumption_exp %>%
+  group_by(consumer_iso3c) %>%
+  summarize(total_cons = sum(live_weight_t))
+
+## Calculate domestic consumption weight
+dom_cons_country <- consumption_exp %>%
+  filter(consumer_iso3c == producer_iso3c) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(dom_cons = sum(live_weight_t))
+
+## Calculate the proportion of consumption that is domestic by country
+prop_domestic_cons <- left_join(dom_cons_country, total_cons_country, by = "consumer_iso3c") %>%
+  group_by(consumer_iso3c) %>%
+  summarize(prop_dom = dom_cons / total_cons)
+
+
+  left_join(prod_country_totals, cons_country_totals, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+    left_join(prop_domestic_cons, by = c("producer_iso3c" = "consumer_iso3c")) %>%
+    mutate(abs_diff = abs(consumption_percap_live_kg_ssp126.x - consumption_percap_live_kg_ssp126.y)) %>%
+    ggplot(aes(x = consumption_percap_live_kg_ssp126.x, y = consumption_percap_live_kg_ssp126.y, color = prop_dom)) +
+    geom_point() +
+    labs(
+      x = "Production weight exposure",
+      y = "Consumption weight exposure",
+      color = "Proportion of consumption\nthat is domestic",
+      title = "Nations' consumption and production exposure weights") +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+    scale_color_viridis_c(option = "plasma") +
+    theme_cowplot() +
+    theme(legend.position = "bottom") +
+    # annotate("text", label = "1:1 line", x = 2e07, y = 1.7e07, angle = 41) +
+    theme(legend.text = element_text(size = 7),
+          plot.title = element_text(hjust = 0.5))
+```
+
+### Validation check: Ensure weights in ARTIS data at the start of analysis add up to at the end of analyis
+
+We want to make sure that no data is dropped or added on, which would change the
+end production and consumption weights. So here we compare here the global and
+nationwide production and consumption weights, at data aqcuirement and after
+analysis, ensuring values equal each other.
+
+```{r compare before vs after analysis production & consumption weights}
+# Step 1 - Disaggregate ARTIS consumption by EEZ of catch
+consumption_before_analysis <- disagg_cons_by_eez()
+
+# Read in ARTIS consumption joined-to-exposure data
+consumption_after_analysis <- read_parquet("../output/consumption_catch_proj_gap_filled/3_species/consumption_total_portfolio_weighted_diagonal_gapfill.parquet")
+
+# Calculate the global production weight with ARTIS consumption file before
+# our analysis
+before_analysis_total_prod <- consumption_before_analysis %>%
+  group_by(producer_iso3c) %>%
+  # Calculate the production weight of each country
+  summarize(country_prod_weight = sum(live_weight_t), .groups = "drop") %>%
+  # Calculate the production weight globally
+  summarize(global_prod_weight = sum(country_prod_weight)) %>%
+  pull(global_prod_weight)
+
+after_analysis_total_prod <- consumption_after_analysis %>%
+  group_by(producer_iso3c) %>%
+  # Calculate the production weight of each country
+  summarize(country_prod_weight = sum(live_weight_t), .groups = "drop") %>%
+  # Calculate the production weight globally
+  summarize(global_prod_weight = sum(country_prod_weight)) %>%
+  pull(global_prod_weight)
+
+# Validation check - production before equals the production after analysis
+prod_b4_eq_prod_after_global <- before_analysis_total_prod == after_analysis_total_prod
+
+# Print validation check result
+print(paste0("Global ARTIS consumption file's production volumes at data acquirement equals production volumes at final analysis point: ",  ifelse(prod_b4_eq_prod_after_global, "Yes", "No")))
+
+
+# Calculate the global consumption weight with ARTIS consumption file before
+# our analysis
+before_analysis_total_cons <- consumption_before_analysis %>%
+  group_by(consumer_iso3c) %>%
+  # Calculate the consumption weight of each country
+  summarize(country_prod_weight = sum(live_weight_t), .groups = "drop") %>%
+  # Calculate the consumption weight globally
+  summarize(global_prod_weight = sum(country_prod_weight)) %>%
+  pull(global_prod_weight)
+
+after_analysis_total_cons <- consumption_after_analysis %>%
+  group_by(consumer_iso3c) %>%
+  # Calculate the consumption weight of each country
+  summarize(country_prod_weight = sum(live_weight_t), .groups = "drop") %>%
+  # Calculate the consumption weight globally
+  summarize(global_prod_weight = sum(country_prod_weight)) %>%
+  pull(global_prod_weight)
+
+# Validation check - consumption before equals the consumption after analysis
+cons_b4_eq_cons_after_global <- before_analysis_total_cons == after_analysis_total_cons
+
+# Print validation check result
+print(paste0("Global ARTIS consumption file's consumption volumes at data acquirement equals consumption volumes at final analysis point: ",  ifelse(prod_b4_eq_prod_after_global, "Yes", "No")))
+
+# Double confirm that all production and consumption weights equal each other
+everything_equals_globally <- all.equal(
+  before_analysis_total_prod,
+  after_analysis_total_prod,
+  before_analysis_total_cons,
+  after_analysis_total_cons
+  )
+
+# Print validation check result
+```
+
+
+### Species exposure data obtained from SAU looks similar to their paper's results
+
+The exposure data we obtained From SAU measures the projected change in maximum
+catch potential for a given species in an EEZ that they were caught in between
+the present and the future. This data originates from the following paper:
+
+Cheung, W. W. L., V. W. Y. Lam, J. L. Sarmiento, K. Kearney, R. Watson,
+D. Zeller, and D. Pauly. 2010. Large-scale redistribution of maximum fisheries
+catch potential in the global ocean under climate change. Global Change Biology,
+16:24–35.
+URL https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1365-2486.2009.01995.x.
+
+We use this data in `01_Analysis.Rmd` to join the catch projection data to ARTIS
+consumption. This validation check will examine the species catch projections
+in our modified consumption dataset and verify that the figures look similar
+to the paper. We also want to make sure that these projections in our data align
+with other literature found across species projection papers. This is to ensure
+that we did not mess up any of the data throughout our analysis.
+
+```{r validate catch proj data similarities to accompanyingpaper}
+## First calculate by EEZ their average latitutd  
+# Read in EEZ boundaries
+eez <- st_read("../data/validation_checks/World_EEZ_v12_20231025/eez_v12.shp") |>
+  st_make_valid()
+
+## Calculate for each EEZ their EEZ area and latitude
+parts <- eez %>%
+  st_cast("POLYGON", warn = FALSE) %>%
+  mutate(
+    area_km2 = as.numeric(st_area(geometry)) / 1e6,
+    lat      = st_coordinates(st_centroid(geometry))[, "Y"]
+  ) %>%
+  st_drop_geometry()
+
+## Since a sovereign country may have multiple EEZ area polygons, we will
+## calculate the average latitude weighted by their polygon areas
+mean_lat_eez <- parts %>%
+  group_by(ISO_SOV1) %>%
+  summarise(
+    mean_lat_area_weighted = weighted.mean(lat, area_km2),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_lat_area_weighted))
+
+# Join mean latitudes to ARTIS production data
+
+## filter ARTIS consumption to the data that is original to SAU data
+## (i.e., no analysis done on our part to gap fill or average exposure to
+## missing species estimates or reported taxa with lower resolution than
+## true species)
+cons_eez_sp <- consumption_exp %>%
+  filter(gapfill_level == "No fill needed") %>%
+  group_by(eez_iso3c, sciname_hs_modified, ssp126, ssp585) %>%
+  summarize(live_weight_t = sum(live_weight_t), .groups = "drop")
+
+# Join to mean latitude data
+cons_eez_sp %>%
+  left_join(mean_lat_eez, by = c("eez_iso3c" = "ISO_SOV1")) %>%
+  group_by(eez_iso3c, mean_lat_area_weighted) %>%
+  summarize(mean_change = mean(ssp126), .groups = "drop") %>%
+  arrange(mean_lat_area_weighted) %>%
+  ggplot(aes(x = mean_change, y = mean_lat_area_weighted)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_line(orientation = "y") +
+  labs(x = "Change in maximum catch potential (%)",
+       y = "Latitude (degree)") +
+  theme_cowplot()
+
+# Look into KWT species that are causing huge shifts in iso3c
+consumption_exp %>%
+  filter(gapfill_level == "No fill needed") %>%
+  group_by(eez_iso3c, sciname_hs_modified, ssp126, ssp585) %>%
+  summarize(live_weight_t = sum(live_weight_t), .groups = "drop") %>%
+  filter(eez_iso3c == "KWT")
+
+
+consumption_exp %>%
+  filter(eez_iso3c == "KWT", gapfill_level == "No fill needed")
+```
+
+### Ensure the catch projection data remains the same before / after analysis
+
+```{r}
+mcp_sovereign <- preprocess_catch_projection_data(dir = dir)
+
+mcp_sovereign %>%
+  left_join(mean_lat_eez, by = c("eez_iso3c" = "ISO_SOV1")) %>%
+  group_by(mean_lat_area_weighted) %>%
+  summarize(mean_change = mean(ssp126, na.rm = TRUE), .groups = "drop") %>%
+  arrange(mean_lat_area_weighted) %>%
+  ggplot(aes(x = mean_change, y = mean_lat_area_weighted)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_line(orientation = "y") +
+  labs(x = "Change in maximum catch potential (%)",
+       y = "Latitude (degree)") +
+  theme_cowplot()
+
+mcp_sovereign %>%
+  left_join(mean_lat_eez, by = c("eez_iso3c" = "ISO_SOV1")) %>%
+  group_by(mean_lat_area_weighted) %>%
+  summarize(mean_change = mean(ssp126, na.rm = TRUE), .groups = "drop") %>% view()
+
+
+mcp_sovereign %>%
+  left_join(mean_lat_eez, by = c("eez_iso3c" = "ISO_SOV1")) %>%
+  group_by(mean_lat_area_weighted)  %>% View()
+
+26.3341714
+```
+
