@@ -1,0 +1,271 @@
+---
+title: "03_ActualResults"
+author: "Connor Quiroz"
+date: "2026-11-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(tidyverse)
+library(ggformula)
+library(countrycode)
+library(data.table)
+library(arrow)
+library(cowplot)
+library(RColorBrewer)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(dirmult)
+library(devtools)
+library(tidytext)
+library(ggsankey)
+library(exploreARTIS)
+library(gtools)
+library(here)
+library(showtext)
+# devtools::install_github("petersonR/bestNormalize", dependencies = TRUE)
+library(bestNormalize)
+
+
+# Set up global font family for plots
+# Register a specific static weight from the variable font file
+font_add(family = "Bahnschrift", regular = "/path/to/bahnschrift.ttf")
+showtext_auto()
+showtext_opts(dpi = 96)  # match whatever dpi your ggsave/rsvg pipeline uses
+
+# font_import()
+family = "Bahnschrift"
+
+# Load helper scripts
+sapply(
+  list.files(file.path("../utils"),
+             pattern = "\\.R$",
+             full.names = TRUE,
+             recursive = TRUE),
+  source
+) %>%
+  invisible()
+```
+
+### Read in data
+
+```{r}
+# Read in ARTIS consumption with catch projections
+artis_cons_proj <- read_parquet("../output/consumption_catch_proj_gap_filled/3_species/consumption_total_portfolio_weighted_diagonal_gapfill.parquet") %>%
+  filter(consumer_iso3c != "NEI") %>%
+  filter(ssp126 >= -100 & ssp126 <= 100)
+```
+
+# Results
+
+## Geographic sourcing contribution to vulnerability
+
+### Proportion of each countries' exposure from foreign / domestic sources
+
+```{r}
+total_consumption_exp <- read_csv("../output/e_s_ac/3_species/e_s_ac_total_portfolio_weighted_diagonal_gapfill.csv") %>%
+  filter(scenario == "ssp126") %>%
+  select(consumer_iso3c, total_exp = delta_cons_weight)
+
+foreign_consumption_exp <- read_csv("../output/e_s_ac/3_species/e_s_ac_foreign_portfolio_weighted_diagonal_gapfill.csv") %>%
+  filter(scenario == "ssp126") %>%
+  select(consumer_iso3c, foreign_exp = delta_cons_weight)
+
+
+# Calculate the percentage that foreign consumption contributes to the total exposure
+total_consumption_exp %>%
+  left_join(foreign_consumption_exp, by = c("consumer_iso3c")) %>%
+  mutate(domestic_exp = total_exp - foreign_exp) %>%
+  mutate(across(c(total_exp, foreign_exp, domestic_exp), ~ round(.,2))) %>%
+  mutate(foreign_prop_conitrubtion = (abs(foreign_exp) / (abs(foreign_exp) + abs(domestic_exp)))) %>%
+  create_map(fill = "foreign_prop_conitrubtion", country.col.name = "consumer_iso3c")
+  
+  # Calculate exposure from domestic sources
+  mutate(domestic_prop_change = total_exp * 2 - pct_change.y,
+         foreign_prop_change = pct_change.y) %>% 
+  # Calculate the proportion contribution of the foreign exposure to the total exposure
+  mutate(foreign_prop_contribution = (abs(foreign_prop_change) / (abs(foreign_prop_change) + abs(domestic_prop_change))),
+         foreign_prop_contribution = round(foreign_prop_contribution, 1)) %>%
+  select(consumer_iso3c, foreign_prop_contribution)
+```
+
+
+### Find the total exposure of each trade flow
+
+```{r}
+artis_cons_proj %>%
+  mutate(ssp126 = (ssp126/100)) %>%
+  mutate(cons_exp = consumption_percap_live_kg * ssp126) %>%
+  group_by(consumer_iso3c) %>%
+  summarize(cons_exp = sum(cons_exp) * -1) %>%
+  create_map(fill = "cons_exp", country.col.name = "consumer_iso3c", color.scale = FALSE) +
+  scale_fill_viridis_c(option = "plasma")
+```
+
+### Find which trade flows are the most highly exposed
+
+```{r}
+robin <- "+proj=robin +lon_0=0"
+
+# ---- base map in Robinson ----
+world <- ne_countries(scale = 50, returnclass = "sf") %>%
+  filter(adm0_a3 != "ATA") %>%
+  st_transform(robin)
+
+# centroids in projected space (adm0_a3 avoids the -99 iso problem)
+cent <- world %>%
+  st_point_on_surface() %>%
+  mutate(x = st_coordinates(.)[, 1],
+         y = st_coordinates(.)[, 2]) %>%
+  st_drop_geometry() %>%
+  select(iso3c = adm0_a3, x, y)
+
+# ---- flows ----
+flows_all <- artis_cons_proj %>%
+  mutate(ssp126 = ssp126 / 100,
+         cons_exp = consumption_percap_live_kg * ssp126) %>%
+  group_by(eez_iso3c, consumer_iso3c) %>%
+  summarize(cons_exp = sum(cons_exp), .groups = "drop") %>%
+  filter(eez_iso3c != consumer_iso3c)
+
+# choropleth fill = total exposure per consuming country (swap to eez_iso3c if you prefer producers)
+country_fill <- flows_all %>%
+  group_by(iso3c = consumer_iso3c) %>%
+  summarize(total_exp = sum(cons_exp), .groups = "drop")
+
+world <- world %>% left_join(country_fill, by = c("adm0_a3" = "iso3c"))
+
+# arrows: top N flows by magnitude
+flows <- flows_all %>%
+  arrange(cons_exp) %>%
+  slice(1:10) %>%
+  left_join(cent, by = c("eez_iso3c" = "iso3c")) %>% rename(x0 = x, y0 = y) %>%
+  left_join(cent, by = c("consumer_iso3c" = "iso3c")) %>% rename(x1 = x, y1 = y) %>%
+  filter(!is.na(x0), !is.na(x1))
+
+# ---- curved arcs as sf lines (quadratic Bezier in projected space) ----
+make_arc <- function(x0, y0, x1, y1, curv = 0.25, n = 60) {
+  mx <- (x0 + x1) / 2; my <- (y0 + y1) / 2
+  dx <- x1 - x0;       dy <- y1 - y0
+  cx <- mx - dy * curv; cy <- my + dx * curv      # control point, perpendicular offset
+  t <- seq(0, 1, length.out = n)
+  st_linestring(cbind((1 - t)^2 * x0 + 2 * (1 - t) * t * cx + t^2 * x1,
+                      (1 - t)^2 * y0 + 2 * (1 - t) * t * cy + t^2 * y1))
+}
+
+arcs <- mapply(make_arc, flows$x0, flows$y0, flows$x1, flows$y1, SIMPLIFY = FALSE)
+flows_sf <- st_sf(flows, geometry = st_sfc(arcs, crs = robin))
+
+origins <- flows %>%
+  distinct(eez_iso3c, x0, y0) %>%
+  st_as_sf(coords = c("x0", "y0"), crs = robin)
+
+# ---- plot ----
+ggplot() +
+  geom_sf(data = world, aes(fill = total_exp), color = "white", linewidth = 0.1) +
+  geom_sf(data = flows_sf,
+          color = "#E8743B", alpha = 0.7, linewidth = 0.8, lineend = "round",
+          arrow = arrow(length = unit(0.18, "cm"), type = "closed")) +
+  geom_sf(data = origins,
+          shape = 21, size = 2, stroke = 0.6,
+          fill = "white", color = "#E8743B") +
+  scale_fill_gradient(low = "#8FB8B0", high = "#10294F",
+                      transform = pseudo_log_trans(sigma = 0.1),
+                      na.value = "grey90", name = "Total exposure") +
+  coord_sf(crs = robin, expand = FALSE) +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+
+## Taxa contribution to vulnerability
+
+### What are the most consumed species
+
+```{r}
+# Which species are the most exposed?
+most_exp_taxa <- artis_cons_proj %>%
+  mutate(ssp126 = (ssp126/100)) %>%
+  mutate(cons_exp = consumption_percap_live_kg * ssp126) %>%
+  group_by(sciname_hs_modified) %>%
+  summarize(cons_exp = sum(cons_exp)) %>%
+  arrange(cons_exp) %>%
+  slice(1:10) %>%
+  pull(sciname_hs_modified)
+
+# Find the top two EEZs for which each taxa is consumed from
+eez_props <- artis_cons_proj %>%
+  filter(!is.na(eez_iso3c)) %>%
+  filter(sciname_hs_modified %in% most_exp_taxa) %>%
+  group_by(eez_iso3c, sciname_hs_modified) %>%
+  summarize(consumption_percap_live_kg = sum(consumption_percap_live_kg)) %>%
+  group_by(sciname_hs_modified) %>%
+  mutate(sciname_cons = sum(consumption_percap_live_kg)) %>%
+  ungroup() %>%
+  mutate(prop_cons = consumption_percap_live_kg / sciname_cons) %>%
+  group_by(sciname_hs_modified) %>%
+  slice_max(prop_cons, n = 4) %>%
+  select(eez_iso3c, sciname_hs_modified, prop_cons)
+
+library(tidyverse)
+library(patchwork)
+
+# Exposure per taxon (same as before)
+taxa_exp <- artis_cons_proj %>%
+  mutate(ssp126 = ssp126 / 100,
+         cons_exp = consumption_percap_live_kg * ssp126) %>%
+  filter(sciname_hs_modified %in% most_exp_taxa) %>%
+  group_by(sciname_hs_modified) %>%
+  summarize(cons_exp = sum(cons_exp), .groups = "drop") %>%
+  mutate(cons_abs = abs(cons_exp),
+         taxa = str_to_sentence(sciname_hs_modified),
+         taxa = fct_reorder(taxa, cons_abs))   # largest at top after coord flip
+
+# Composition: top-two EEZs plus the remainder as "Other"
+comp <- eez_props %>%
+  ungroup() %>%
+  transmute(taxa = str_to_sentence(sciname_hs_modified),
+            eez = eez_iso3c, prop = prop_cons) %>%
+  group_by(taxa) %>%
+  group_modify(~ add_row(.x, eez = "Other", prop = 1 - sum(.x$prop))) %>%
+  ungroup() %>%
+  filter(prop > 1e-6) %>%
+  mutate(taxa = factor(taxa, levels = levels(taxa_exp$taxa)))
+
+# Panel A: exposure
+pA <- ggplot(taxa_exp, aes(cons_abs, taxa)) +
+  geom_col(fill = "grey30", width = 0.7) +
+  labs(x = "Consumption exposure", y = NULL) +
+  theme_minimal() +
+  theme(panel.grid.major.y = element_blank())
+
+# Panel B: where each taxon is caught (100% stacked)
+comp <- comp %>%
+  mutate(sort_key = if_else(eez == "Other", -1, prop),        # keeps "Other" at the right end
+         grp = fct_reorder(interaction(taxa, eez), sort_key))  # one level per bar segment
+
+pB <- ggplot(comp, aes(prop, taxa, fill = eez, group = grp)) +
+  geom_col(width = 0.7, color = "white") +
+  geom_text(aes(label = ifelse(prop > 0.06, eez, "")),
+            position = position_stack(vjust = 0.5), size = 3) +
+  scale_x_continuous(labels = scales::percent, expand = c(0, 0)) +
+  scale_fill_manual(values = c(Other = "grey80",
+                               setNames(scales::hue_pal()(n_distinct(comp$eez) - 1),
+                                        setdiff(unique(comp$eez), "Other")))) +
+  labs(x = "Share of consumption by EEZ of capture", y = NULL) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.y = element_blank(),
+        panel.grid = element_blank())
+
+p <- pA + pB + plot_layout(widths = c(1, 1.3))
+
+print(p)
+
+ggsave("../images/testing/most_exp_taxa.pdf", plot = p, width = 11, height = 5, device = cairo_pdf)
+```
+
